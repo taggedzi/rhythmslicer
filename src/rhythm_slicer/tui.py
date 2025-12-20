@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+import importlib
+import pkgutil
 import asyncio
 import math
 import random
@@ -169,6 +171,7 @@ class RhythmSlicerApp(App):
         Binding("-", "volume_down", "Volume -5"),
         Binding("r", "cycle_repeat", "Repeat Mode"),
         Binding("h", "toggle_shuffle", "Shuffle"),
+        Binding("v", "select_visualization", "Visualization"),
         Binding("ctrl+s", "save_playlist", "Save Playlist"),
         Binding("ctrl+o", "open", "Open"),
         Binding("q", "quit_app", "Quit"),
@@ -199,6 +202,7 @@ class RhythmSlicerApp(App):
         self._scrub_active = False
         self._repeat_mode = config.repeat_mode
         self._shuffle = config.shuffle
+        self._viz_name = config.viz_name
         self._play_order: list[int] = []
         self._play_order_pos = -1
         self._rng = rng or random.Random()
@@ -291,6 +295,7 @@ class RhythmSlicerApp(App):
             volume=self._volume,
             repeat_mode=self._repeat_mode,
             shuffle=self._shuffle,
+            viz_name=self._viz_name,
         )
         save_config(self._config)
 
@@ -684,6 +689,23 @@ class RhythmSlicerApp(App):
         self._set_message(f"Shuffle: {'on' if self._shuffle else 'off'}")
         self._update_playlist_view()
         self._save_config()
+
+    async def action_select_visualization(self) -> None:
+        choices = self._list_visualizations()
+        result = await self.push_screen_wait(
+            VizPrompt(self._viz_name, choices)
+        )
+        if not result:
+            return
+        selection = result.strip()
+        if selection not in choices:
+            self._set_message("Unknown visualization")
+            return
+        self._viz_name = selection
+        self._save_config()
+        if self._current_track_path:
+            self._restart_hackscript()
+        self._set_message(f"Visualization: {selection}")
 
     async def action_save_playlist(self) -> None:
         if not self.playlist or self.playlist.is_empty():
@@ -1083,11 +1105,12 @@ class RhythmSlicerApp(App):
         self._update_visualizer_viewport()
         resolved = track_path.expanduser().resolve()
         self._current_track_path = resolved
-        prefs = {"show_absolute_paths": False}
+        prefs = {"show_absolute_paths": False, "viz": self._viz_name}
         frames = generate_hackscript(
             resolved,
             (self._viewport_width, self._viewport_height),
             prefs,
+            viz_name=self._viz_name,
         )
         self._frame_player.start(frames)
 
@@ -1102,6 +1125,29 @@ class RhythmSlicerApp(App):
         self._last_visualizer_text = None
         if self._visualizer:
             self._visualizer.update(self._render_visualizer())
+
+    def _list_visualizations(self) -> list[str]:
+        try:
+            package = importlib.import_module("rhythm_slicer.visualizations")
+        except Exception:
+            return [self._viz_name or "hackscope"]
+        names: list[str] = []
+        for module_info in pkgutil.iter_modules(package.__path__):
+            name = module_info.name
+            try:
+                module = importlib.import_module(
+                    f"rhythm_slicer.visualizations.{name}"
+                )
+            except Exception:
+                continue
+            viz_name = getattr(module, "VIZ_NAME", None)
+            if isinstance(viz_name, str) and callable(
+                getattr(module, "generate_frames", None)
+            ):
+                names.append(viz_name)
+        if not names:
+            return [self._viz_name or "hackscope"]
+        return sorted(set(names))
 
 
 class PlaylistPrompt(ModalScreen[Optional[str]]):
@@ -1179,6 +1225,49 @@ class PlaylistPrompt(ModalScreen[Optional[str]]):
                 self.dismiss(f"{value}::abs={int(absolute)}")
             else:
                 self.dismiss(None)
+
+
+class VizPrompt(ModalScreen[Optional[str]]):
+    """Modal prompt for selecting a visualization."""
+
+    def __init__(self, current: str, choices: list[str]) -> None:
+        super().__init__()
+        self._current = current
+        self._choices = choices
+
+    def compose(self) -> ComposeResult:
+        with Container(id="playlist_prompt"):
+            yield Static("Visualization", id="prompt_title")
+            options = "Available: " + ", ".join(self._choices)
+            yield Static(options, id="prompt_hint")
+            yield Input(value=self._current, id="prompt_input")
+            with Horizontal(id="prompt_buttons"):
+                yield Button("OK", id="prompt_ok")
+                yield Button("Cancel", id="prompt_cancel")
+
+    def on_mount(self) -> None:
+        self.query_one("#prompt_input", Input).focus()
+
+    def _confirm(self) -> None:
+        value = self.query_one("#prompt_input", Input).value.strip()
+        if value:
+            self.dismiss(value)
+        else:
+            self.dismiss(None)
+
+    def on_button_pressed(self, event: Button.Pressed) -> None:
+        if event.button.id == "prompt_ok":
+            self._confirm()
+        else:
+            self.dismiss(None)
+
+    def on_key(self, event: events.Key) -> None:
+        if event.key == "escape":
+            self.dismiss(None)
+            return
+        if event.key == "enter":
+            if isinstance(self.app.focused, Input):
+                self._confirm()
 
 
 class OpenPrompt(ModalScreen[Optional[str]]):

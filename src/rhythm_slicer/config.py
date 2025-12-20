@@ -16,6 +16,7 @@ class AppConfig:
     volume: int = 100
     repeat_mode: str = "off"
     shuffle: bool = False
+    viz_name: str = "hackscope"
 
 
 def get_config_dir(app_name: str = "rhythm-slicer") -> Path:
@@ -54,6 +55,7 @@ def save_config(cfg: AppConfig) -> None:
         "volume": cfg.volume,
         "repeat_mode": cfg.repeat_mode,
         "shuffle": cfg.shuffle,
+        "viz_name": cfg.viz_name,
     }
     temp_path.write_text(json.dumps(data, indent=2), encoding="utf-8")
     os.replace(temp_path, path)
@@ -89,10 +91,14 @@ def _config_from_mapping(raw: dict[str, Any]) -> AppConfig:
     shuffle = raw.get("shuffle", False)
     if not isinstance(shuffle, bool):
         shuffle = False
+    viz_name = raw.get("viz_name", "hackscope")
+    if not isinstance(viz_name, str) or not viz_name:
+        viz_name = "hackscope"
     return AppConfig(
         last_open_path=last_open_path,
         open_recursive=open_recursive,
         volume=volume,
         repeat_mode=repeat,
         shuffle=shuffle,
+        viz_name=viz_name,
     )
