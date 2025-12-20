@@ -69,6 +69,19 @@ class Playlist:
             self.index -= 1
         return self.current()
 
+    def remove(self, index: int) -> None:
+        if index < 0 or index >= len(self.tracks):
+            return
+        del self.tracks[index]
+        if self.is_empty():
+            self.index = -1
+            return
+        if index < self.index:
+            self.index -= 1
+            return
+        if index == self.index and self.index >= len(self.tracks):
+            self.index = len(self.tracks) - 1
+
 
 def _is_supported(path: Path) -> bool:
     return path.suffix.lower() in SUPPORTED_EXTENSIONS

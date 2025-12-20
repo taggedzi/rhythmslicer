@@ -43,3 +43,50 @@ def test_playlist_wrap_next_prev() -> None:
     assert playlist.current() == tracks[0]
     playlist.prev()
     assert playlist.current() == tracks[1]
+
+
+def test_remove_before_current_decrements_index() -> None:
+    tracks = [
+        Track(path=Path("one.mp3"), title="one.mp3"),
+        Track(path=Path("two.mp3"), title="two.mp3"),
+        Track(path=Path("three.mp3"), title="three.mp3"),
+    ]
+    playlist = Playlist(tracks)
+    playlist.set_index(2)
+    playlist.remove(1)
+    assert playlist.index == 1
+    assert playlist.current() == tracks[2]
+
+
+def test_remove_current_index_keeps_position() -> None:
+    tracks = [
+        Track(path=Path("one.mp3"), title="one.mp3"),
+        Track(path=Path("two.mp3"), title="two.mp3"),
+        Track(path=Path("three.mp3"), title="three.mp3"),
+    ]
+    playlist = Playlist(tracks)
+    playlist.set_index(1)
+    playlist.remove(1)
+    assert playlist.index == 1
+    assert playlist.current() == tracks[2]
+
+
+def test_remove_last_item_clamps_index() -> None:
+    tracks = [
+        Track(path=Path("one.mp3"), title="one.mp3"),
+        Track(path=Path("two.mp3"), title="two.mp3"),
+        Track(path=Path("three.mp3"), title="three.mp3"),
+    ]
+    playlist = Playlist(tracks)
+    playlist.set_index(2)
+    playlist.remove(2)
+    assert playlist.index == 1
+    assert playlist.current() == tracks[1]
+
+
+def test_remove_only_item_empties_playlist() -> None:
+    tracks = [Track(path=Path("one.mp3"), title="one.mp3")]
+    playlist = Playlist(tracks)
+    playlist.remove(0)
+    assert playlist.index == -1
+    assert playlist.is_empty()

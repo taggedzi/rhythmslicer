@@ -191,3 +191,37 @@ def test_play_selected_uses_list_selection() -> None:
     app.action_play_selected()
     assert playlist.index == 1
     assert player.loaded[-1] == "two.mp3"
+
+
+def test_remove_current_track_plays_next() -> None:
+    tracks = [
+        Track(path=Path("one.mp3"), title="one.mp3"),
+        Track(path=Path("two.mp3"), title="two.mp3"),
+    ]
+    playlist = Playlist(tracks)
+    player = DummyPlayer()
+    app = tui.RhythmSlicerApp(player=player, path="song.mp3", playlist=playlist)
+
+    app._selection_index = 0
+    playlist.set_index(0)
+    app._play_current_track()
+    app.action_remove_selected()
+    assert playlist.index == 0
+    assert playlist.current() == tracks[1]
+    assert player.loaded[-1] == "two.mp3"
+
+
+def test_remove_current_track_stops_when_empty() -> None:
+    tracks = [Track(path=Path("one.mp3"), title="one.mp3")]
+    playlist = Playlist(tracks)
+    player = DummyPlayer()
+    app = tui.RhythmSlicerApp(player=player, path="song.mp3", playlist=playlist)
+
+    app._selection_index = 0
+    playlist.set_index(0)
+    app._play_current_track()
+    app.action_remove_selected()
+    assert playlist.is_empty()
+    assert player.stop_calls == 1
+    assert app._message is not None
+    assert app._message.text == "Playlist empty"

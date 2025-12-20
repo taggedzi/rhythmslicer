@@ -118,6 +118,7 @@ class RhythmSlicerApp(App):
         Binding("n", "next_track", "Next"),
         Binding("p", "previous_track", "Previous"),
         Binding("enter", "play_selected", "Play Selected"),
+        Binding("d", "remove_selected", "Remove Selected"),
         Binding("+", "volume_up", "Volume +5"),
         Binding("-", "volume_down", "Volume -5"),
         Binding("r", "cycle_repeat", "Repeat Mode"),
@@ -155,6 +156,7 @@ class RhythmSlicerApp(App):
         self._rng = rng or random.Random()
         self._last_playlist_path: Optional[Path] = None
         self._message: Optional[TuiMessage] = None
+        self._playing_index: Optional[int] = None
         self._header: Optional[Static] = None
         self._visualizer: Optional[Static] = None
         self._playlist_list: Optional[Static] = None
@@ -215,7 +217,7 @@ class RhythmSlicerApp(App):
                 title = track.title
         repeat_label = self._repeat_mode.capitalize()
         shuffle_label = "On" if self._shuffle else "Off"
-        hotkeys = "Keys: Space S ←/→ N/P Enter Q + - R H Ctrl+S Ctrl+O"
+        hotkeys = "Keys: Space S ←/→ N/P Enter D Q + - R H Ctrl+S Ctrl+O"
         message = self._pop_message()
         track_count = len(self.playlist.tracks) if self.playlist else 0
         base = (
@@ -328,6 +330,7 @@ class RhythmSlicerApp(App):
         except Exception:
             self._set_message(f"Failed to play: {track.title}")
             return False
+        self._playing_index = self.playlist.index
         self._sync_selection()
         return True
 
@@ -397,6 +400,7 @@ class RhythmSlicerApp(App):
 
     def action_stop(self) -> None:
         self.player.stop()
+        self._playing_index = None
         self._set_message("Stopped")
 
     def action_seek_back(self) -> None:
@@ -461,6 +465,41 @@ class RhythmSlicerApp(App):
             self._set_message("No tracks loaded")
             return
         self._play_selected()
+
+    def action_remove_selected(self) -> None:
+        if not self.playlist or self.playlist.is_empty():
+            return
+        if self._selection_index < 0 or self._selection_index >= len(self.playlist.tracks):
+            self._selection_index = max(
+                0, min(self._selection_index, len(self.playlist.tracks) - 1)
+            )
+            self._update_playlist_view()
+            return
+        selected_index = self._selection_index
+        removed_track = self.playlist.tracks[selected_index]
+        playing_index = (
+            self._playing_index if self._playing_index is not None else self.playlist.index
+        )
+        was_playing = selected_index == playing_index
+        self.playlist.remove(selected_index)
+        self._reset_play_order()
+        if self.playlist.is_empty():
+            self._selection_index = 0
+            if self._playlist_list:
+                self._playlist_list.update("No tracks loaded")
+            if was_playing:
+                self.player.stop()
+                self._playing_index = None
+                self._set_message("Playlist empty")
+            else:
+                self._set_message(f"Removed: {removed_track.title}")
+            return
+        self._selection_index = min(selected_index, len(self.playlist.tracks) - 1)
+        self._update_playlist_view()
+        if was_playing:
+            if not self._play_current_track():
+                self._skip_failed_track()
+        self._set_message(f"Removed: {removed_track.title}")
 
     def action_cycle_repeat(self) -> None:
         modes = ["off", "one", "all"]
