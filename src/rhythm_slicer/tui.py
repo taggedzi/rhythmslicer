@@ -288,10 +288,8 @@ class RhythmSlicerApp(App):
         if not self._playlist_list or self.playlist is None:
             return
         self._selection_index = 0
-        if self.playlist.is_empty():
-            self._playlist_list.update("No tracks loaded")
-            return
-        self._selection_index = self.playlist.index
+        if not self.playlist.is_empty():
+            self._selection_index = self.playlist.index
         self._update_playlist_view()
 
     def _sync_selection(self) -> None:
@@ -525,7 +523,20 @@ class RhythmSlicerApp(App):
         if not self._playlist_list or not self.playlist:
             return
         width = self._playlist_width()
-        lines: list[str] = []
+        view_height = self._playlist_view_height()
+        footer = self._render_playlist_footer()
+        track_height = max(0, view_height - 1)
+        if self.playlist.is_empty():
+            lines: list[str] = []
+            if track_height > 0:
+                message = _truncate_line("No tracks loaded", width)
+                lines.append(message)
+                if len(lines) < track_height:
+                    lines.extend([""] * (track_height - len(lines)))
+            lines.append(footer)
+            self._playlist_list.update("\n".join(lines))
+            return
+        lines = []
         for idx, track in enumerate(self.playlist.tracks):
             marker = "▶" if idx == self.playlist.index else " "
             selector = "➤" if idx == self._selection_index else " "
@@ -537,19 +548,32 @@ class RhythmSlicerApp(App):
             else:
                 title = title.ljust(title_space)
             lines.append(prefix + title)
-        view_height = self._playlist_view_height()
-        max_offset = max(0, len(lines) - view_height)
+        if track_height == 0:
+            self._playlist_list.update(footer)
+            return
+        max_offset = max(0, len(lines) - track_height)
         self._scroll_offset = min(self._scroll_offset, max_offset)
         if self._selection_index < self._scroll_offset:
             self._scroll_offset = self._selection_index
-        elif self._selection_index >= self._scroll_offset + view_height:
-            self._scroll_offset = self._selection_index - view_height + 1
+        elif self._selection_index >= self._scroll_offset + track_height:
+            self._scroll_offset = self._selection_index - track_height + 1
         start = max(0, min(self._scroll_offset, max_offset))
-        end = start + view_height
+        end = start + track_height
         visible = lines[start:end]
-        if len(visible) < view_height:
-            visible.extend([""] * (view_height - len(visible)))
+        if len(visible) < track_height:
+            visible.extend([""] * (track_height - len(visible)))
+        visible.append(footer)
         self._playlist_list.update("\n".join(visible))
+
+    def _render_playlist_footer(self) -> str:
+        if not self.playlist or self.playlist.is_empty():
+            current = "--"
+            total = 0
+        else:
+            current = str(self.playlist.index + 1)
+            total = len(self.playlist.tracks)
+        text = f"Track: {current}/{total}"
+        return _truncate_line(text, self._playlist_width())
 
     def _playlist_width(self) -> int:
         if not self._playlist_list:

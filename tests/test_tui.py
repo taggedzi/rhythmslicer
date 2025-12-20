@@ -127,6 +127,44 @@ def test_build_play_order_shuffle_keeps_current() -> None:
     assert order[pos] == 3
 
 
+def test_playlist_footer_empty() -> None:
+    playlist = Playlist([])
+    app = tui.RhythmSlicerApp(player=DummyPlayer(), path="song.mp3", playlist=playlist)
+    assert app._render_playlist_footer() == "Track: --/0"
+
+
+def test_playlist_footer_single_track() -> None:
+    tracks = [Track(path=Path("one.mp3"), title="one.mp3")]
+    playlist = Playlist(tracks)
+    app = tui.RhythmSlicerApp(player=DummyPlayer(), path="song.mp3", playlist=playlist)
+    assert app._render_playlist_footer() == "Track: 1/1"
+
+
+def test_playlist_footer_multiple_tracks() -> None:
+    tracks = [
+        Track(path=Path("one.mp3"), title="one.mp3"),
+        Track(path=Path("two.mp3"), title="two.mp3"),
+        Track(path=Path("three.mp3"), title="three.mp3"),
+    ]
+    playlist = Playlist(tracks)
+    playlist.set_index(1)
+    app = tui.RhythmSlicerApp(player=DummyPlayer(), path="song.mp3", playlist=playlist)
+    assert app._render_playlist_footer() == "Track: 2/3"
+
+
+def test_playlist_footer_after_removal() -> None:
+    tracks = [
+        Track(path=Path("one.mp3"), title="one.mp3"),
+        Track(path=Path("two.mp3"), title="two.mp3"),
+        Track(path=Path("three.mp3"), title="three.mp3"),
+    ]
+    playlist = Playlist(tracks)
+    playlist.set_index(1)
+    playlist.remove(1)
+    app = tui.RhythmSlicerApp(player=DummyPlayer(), path="song.mp3", playlist=playlist)
+    assert app._render_playlist_footer() == "Track: 2/2"
+
+
 def test_next_prev_respects_wrap() -> None:
     tracks = [
         Track(path=Path("one.mp3"), title="one.mp3"),
