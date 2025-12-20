@@ -134,6 +134,10 @@ class FramePlayer:
             return
         try:
             frame = next(self._frames)
+        except Exception as exc:
+            self._app._set_message(f"Visualizer error: {exc}", level="error")
+            self.stop()
+            return
         except StopIteration:
             self.stop()
             return
@@ -152,9 +156,124 @@ class VisualizerHud(Static):
 
 
 @dataclass
-class TuiMessage:
+class StatusMessage:
     text: str
-    until: float
+    level: str
+    until: Optional[float]
+
+
+class StatusController:
+    """Status bar state and rendering."""
+
+    def __init__(self, now: Callable[[], float]) -> None:
+        self._now = now
+        self._message: Optional[StatusMessage] = None
+        self._context: Optional[str] = None
+
+    def show_message(
+        self,
+        text: str,
+        *,
+        level: str = "info",
+        timeout: Optional[float] = None,
+    ) -> None:
+        if timeout is None:
+            if level == "warn":
+                timeout = 6.0
+            elif level == "error":
+                timeout = 0.0
+            else:
+                timeout = 3.0
+        until = None if timeout == 0 else self._now() + max(0.0, timeout)
+        self._message = StatusMessage(text=text, level=level, until=until)
+
+    def clear_message(self) -> None:
+        self._message = None
+
+    def set_context(self, name: str) -> None:
+        self._context = name
+
+    def render_line(self, width: int, *, focused: object | None = None) -> Text:
+        message = self._current_message()
+        if message:
+            line = _truncate_line(message.text, width)
+            style = None
+            if message.level == "warn":
+                style = "#ffcc66"
+            elif message.level == "error":
+                style = "#ff5f52"
+            return Text(line, style=style) if style else Text(line)
+        hint = self._render_hint(focused)
+        return Text(_truncate_line(hint, width))
+
+    def _current_message(self) -> Optional[StatusMessage]:
+        if not self._message:
+            return None
+        if self._message.until is None:
+            return self._message
+        if self._message.until > self._now():
+            return self._message
+        self._message = None
+        return None
+
+    def _render_hint(self, focused: object | None) -> str:
+        context = self._context or self._context_from_focus(focused)
+        if context == "playlist":
+            return "Enter: play  Del: remove  ↑↓: navigate  ?: help"
+        if context == "visualizer":
+            return "V: change viz  R: restart viz  ?: help"
+        if context == "transport":
+            return "Space: play/pause  ←/→: seek  ?: help"
+        return "Space: play/pause  Enter: play  ?: help"
+
+    def _context_from_focus(self, focused: object | None) -> str:
+        if focused is None:
+            return "general"
+        if isinstance(focused, str):
+            focus_id = focused
+            if focus_id in {"playlist_list", "playlist_pane"}:
+                return "playlist"
+            if focus_id in {"visualizer", "visualizer_hud", "visuals_pane", "visuals_stack"}:
+                return "visualizer"
+            if focus_id in {"transport_row", "key_prev", "key_playpause", "key_stop", "key_next"}:
+                return "transport"
+            return "general"
+        if self._focus_has_id(
+            focused, {"playlist_list", "playlist_pane"}
+        ):
+            return "playlist"
+        if self._focus_has_id(
+            focused,
+            {"visualizer", "visualizer_hud", "visuals_pane", "visuals_stack"},
+        ):
+            return "visualizer"
+        if self._focus_has_id(
+            focused,
+            {"transport_row", "key_prev", "key_playpause", "key_stop", "key_next"},
+        ):
+            return "transport"
+        return "general"
+
+    def _focus_has_id(self, widget: object, ids: set[str]) -> bool:
+        current = widget
+        while current is not None:
+            if getattr(current, "id", None) in ids:
+                return True
+            current = getattr(current, "parent", None)
+        return False
+
+
+class StatusBar(Static):
+    """Status bar widget."""
+
+    def __init__(self, controller: StatusController, **kwargs: object) -> None:
+        super().__init__(**kwargs)
+        self._controller = controller
+
+    def render(self) -> Text:
+        width = max(1, self.size.width)
+        focused = getattr(self.app, "focused", None)
+        return self._controller.render_line(width, focused=focused)
 
 
 class RhythmSlicerApp(App):
@@ -221,14 +340,14 @@ class RhythmSlicerApp(App):
             else None
         )
         self._open_recursive = config.open_recursive
-        self._message: Optional[TuiMessage] = None
+        self._status_controller = StatusController(self._now)
         self._playing_index: Optional[int] = None
         self._header: Optional[Static] = None
         self._visualizer: Optional[Static] = None
         self._visualizer_hud: Optional[Static] = None
         self._playlist_list: Optional[Static] = None
         self._progress: Optional[Static] = None
-        self._status: Optional[Static] = None
+        self._status: Optional[StatusBar] = None
         self._progress_tick = 0
         self._frame_player = FramePlayer(self)
         self._current_track_path: Optional[Path] = None
@@ -261,7 +380,7 @@ class RhythmSlicerApp(App):
                         yield Static(id="visualizer")
                         yield VisualizerHud(id="visualizer_hud")
             yield Static(id="progress")
-            yield Static(id="status")
+            yield StatusBar(self._status_controller, id="status")
 
     async def on_mount(self) -> None:
         self._header = self.query_one("#header", Static)
@@ -272,7 +391,7 @@ class RhythmSlicerApp(App):
         playlist_pane = self.query_one("#playlist_pane", Container)
         playlist_pane.border_title = "Playlist"
         self._progress = self.query_one("#progress", Static)
-        self._status = self.query_one("#status", Static)
+        self._status = self.query_one("#status", StatusBar)
         if self._visualizer:
             self._visualizer.border_title = "Visualizer"
         self._update_visualizer_hud()
@@ -298,8 +417,14 @@ class RhythmSlicerApp(App):
         self._update_transport_row()
         self.set_interval(0.1, self._on_tick)
 
-    def _set_message(self, text: str, duration: float = 2.0) -> None:
-        self._message = TuiMessage(text=text, until=self._now() + duration)
+    def _set_message(
+        self,
+        text: str,
+        *,
+        level: str = "info",
+        timeout: Optional[float] = None,
+    ) -> None:
+        self._status_controller.show_message(text, level=level, timeout=timeout)
 
     def _save_config(self) -> None:
         self._config = AppConfig(
@@ -315,21 +440,11 @@ class RhythmSlicerApp(App):
         )
         save_config(self._config)
 
-    def _pop_message(self) -> Optional[str]:
-        if self._message and self._message.until > self._now():
-            return self._message.text
-        self._message = None
-        return None
-
-    def _render_status(self) -> str:
-        message = self._pop_message()
-        track_count = len(self.playlist.tracks) if self.playlist else 0
-        base = f"Tracks: {track_count}"
-        line = f"{message} | {base}" if message else base
-        if self._status:
-            max_width = max(1, self._status.size.width)
-            line = _truncate_line(line, max_width)
-        return line
+    def _render_status(self) -> Text:
+        if not self._status:
+            return Text("")
+        max_width = max(1, self._status.size.width)
+        return self._status_controller.render_line(max_width, focused=self.focused)
 
     def _render_modes(self) -> str:
         mode_map = {"off": "OFF", "one": "ONE", "all": "ALL"}
@@ -549,7 +664,7 @@ class RhythmSlicerApp(App):
             self.player.load(str(track.path))
             self.player.play()
         except Exception:
-            self._set_message(f"Failed to play: {track.title}")
+            self._set_message(f"Failed to play: {track.title}", level="error")
             return False
         self._playing_index = self.playlist.index
         self._sync_selection()
@@ -598,7 +713,7 @@ class RhythmSlicerApp(App):
         if callable(seek):
             if seek(delta_ms):
                 return True
-        self._set_message("Seek unsupported")
+        self._set_message("Seek unsupported", level="warn")
         return False
 
     def _get_playback_position_ms(self) -> int | None:
@@ -645,7 +760,7 @@ class RhythmSlicerApp(App):
     def _seek_to_ratio(self, ratio: float) -> bool:
         length = self.player.get_length_ms()
         if not length or length <= 0:
-            self._set_message("Seek unsupported")
+            self._set_message("Seek unsupported", level="warn")
             return False
         set_ratio = getattr(self.player, "set_position_ratio", None)
         if callable(set_ratio):
@@ -660,7 +775,7 @@ class RhythmSlicerApp(App):
             if seek(delta):
                 self._schedule_viz_restart()
                 return True
-        self._set_message("Seek unsupported")
+        self._set_message("Seek unsupported", level="warn")
         return False
 
     def action_toggle_playback(self) -> None:
@@ -709,14 +824,14 @@ class RhythmSlicerApp(App):
     def action_volume_up(self) -> None:
         self._volume = min(100, self._volume + 5)
         self.player.set_volume(self._volume)
-        self._set_message(f"Volume {self._volume}")
+        self._set_message("Volume up")
         self._save_config()
         self._update_visualizer_hud()
 
     def action_volume_down(self) -> None:
         self._volume = max(0, self._volume - 5)
         self.player.set_volume(self._volume)
-        self._set_message(f"Volume {self._volume}")
+        self._set_message("Volume down")
         self._save_config()
         self._update_visualizer_hud()
 
@@ -836,7 +951,7 @@ class RhythmSlicerApp(App):
             return
         selection = result.strip()
         if selection not in choices:
-            self._set_message("Unknown visualization")
+            self._set_message("Unknown visualization", level="warn")
             return
         self._viz_name = selection
         self._save_config()
@@ -846,7 +961,7 @@ class RhythmSlicerApp(App):
 
     async def action_save_playlist(self) -> None:
         if not self.playlist or self.playlist.is_empty():
-            self._set_message("No tracks to save")
+            self._set_message("No tracks to save", level="warn")
             return
         self.run_worker(self._save_playlist_flow(), exclusive=True)
 
@@ -1029,6 +1144,7 @@ class RhythmSlicerApp(App):
         self._update_visualizer_hud()
         if self._current_track_path:
             self._restart_hackscript_from_player()
+            self._set_message("Visualizer restarted (resize)")
         elif self._visualizer and not self._frame_player.is_running:
             self._visualizer.update(self._render_visualizer())
 
@@ -1134,7 +1250,7 @@ class RhythmSlicerApp(App):
 
             save_m3u8(self.playlist, dest, mode="absolute" if absolute else "auto")
         except Exception as exc:
-            self._set_message(f"Save failed: {exc}")
+            self._set_message(f"Save failed: {exc}", level="error")
             return
         self._last_playlist_path = dest
         self._set_message(f"Saved playlist: {dest}")
@@ -1149,10 +1265,10 @@ class RhythmSlicerApp(App):
         try:
             new_playlist = load_from_input(path)
         except Exception as exc:
-            self._set_message(f"Load failed: {exc}")
+            self._set_message(f"Load failed: {exc}", level="error")
             return
         if new_playlist.is_empty():
-            self._set_message("Playlist is empty")
+            self._set_message("Playlist is empty", level="warn")
             return
         preserve = self.playlist.current().path if self.playlist else None
         await self.set_playlist(new_playlist, preserve_path=preserve)
@@ -1173,7 +1289,7 @@ class RhythmSlicerApp(App):
     async def _handle_open_path(self, path_str: str, *, recursive: bool = False) -> None:
         path = Path(path_str).expanduser()
         if not path.exists():
-            self._set_message("Path not found")
+            self._set_message("Path not found", level="warn")
             return
         try:
             if recursive and path.is_dir():
@@ -1181,10 +1297,10 @@ class RhythmSlicerApp(App):
             else:
                 new_playlist = load_from_input(path)
         except Exception as exc:
-            self._set_message(f"Load failed: {exc}")
+            self._set_message(f"Load failed: {exc}", level="error")
             return
         if new_playlist.is_empty():
-            self._set_message("No supported audio files found")
+            self._set_message("No supported audio files found", level="warn")
             return
         await self.set_playlist_from_open(new_playlist, source_path=path)
         self._last_open_path = path

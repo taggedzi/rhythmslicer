@@ -68,6 +68,30 @@ class DummyPlayerNoSeek(DummyPlayer):
     seek_ms = None  # type: ignore[assignment]
 
 
+def _status_line(controller: tui.StatusController, *, width: int = 80) -> str:
+    return controller.render_line(width).plain
+
+
+def test_status_message_timeout_shows_hint() -> None:
+    current = [0.0]
+    controller = tui.StatusController(now=lambda: current[0])
+    controller.show_message("Hello", timeout=1.0)
+    assert "Hello" in _status_line(controller)
+    current[0] = 2.0
+    line = _status_line(controller)
+    assert "Hello" not in line
+    assert "Space: play/pause" in line
+    assert "Song" not in line
+
+
+def test_status_message_overrides_hint() -> None:
+    controller = tui.StatusController(now=lambda: 0.0)
+    controller.show_message("Alert", timeout=3.0)
+    line = controller.render_line(80, focused="playlist_list").plain
+    assert "Alert" in line
+    assert "Enter: play" not in line
+
+
 @pytest.fixture(autouse=True)
 def stub_config(monkeypatch) -> None:
     monkeypatch.setattr(tui, "load_config", lambda: AppConfig())
@@ -116,8 +140,7 @@ def test_seek_shows_message_when_unsupported() -> None:
     player = DummyPlayerNoSeek()
     app = tui.RhythmSlicerApp(player=player, path="song.mp3")
     app.action_seek_forward()
-    assert app._message is not None
-    assert app._message.text == "Seek unsupported"
+    assert "Seek unsupported" in _status_line(app._status_controller)
 
 
 def test_volume_adjustments() -> None:
@@ -321,8 +344,7 @@ def test_open_path_missing_shows_message(tmp_path: Path) -> None:
     missing = tmp_path / "missing"
     app = tui.RhythmSlicerApp(player=DummyPlayer(), path="song.mp3")
     asyncio.run(app._handle_open_path(str(missing)))
-    assert app._message is not None
-    assert app._message.text == "Path not found"
+    assert "Path not found" in _status_line(app._status_controller)
 
 
 def test_open_path_empty_playlist_shows_message(monkeypatch, tmp_path: Path) -> None:
@@ -338,8 +360,7 @@ def test_open_path_empty_playlist_shows_message(monkeypatch, tmp_path: Path) -> 
     monkeypatch.setattr(tui, "load_from_input", fake_load)
 
     asyncio.run(app._handle_open_path(str(target)))
-    assert app._message is not None
-    assert app._message.text == "No supported audio files found"
+    assert "No supported audio files found" in _status_line(app._status_controller)
     assert player.play_calls == 0
 
 
@@ -362,8 +383,7 @@ def test_open_path_recursive_loads_sorted_tracks(tmp_path: Path) -> None:
     assert len(calls) == 1
     titles = [track.title for track in calls[0].tracks]
     assert titles == ["b.mp3", "a.mp3"]
-    assert app._message is not None
-    assert app._message.text == "Loaded 2 tracks (recursive)"
+    assert "Loaded 2 tracks (recursive)" in _status_line(app._status_controller)
 
 
 def test_next_prev_respects_wrap() -> None:
@@ -462,5 +482,4 @@ def test_remove_current_track_stops_when_empty() -> None:
     app.action_remove_selected()
     assert playlist.is_empty()
     assert player.stop_calls == 1
-    assert app._message is not None
-    assert app._message.text == "Playlist empty"
+    assert "Playlist empty" in _status_line(app._status_controller)
