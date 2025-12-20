@@ -99,3 +99,11 @@ class VlcPlayer:
         except Exception:
             return False
         return True
+
+    def set_position_ratio(self, ratio: float) -> bool:
+        """Seek to an absolute position ratio between 0.0 and 1.0."""
+        try:
+            self._player.set_position(max(0.0, min(1.0, float(ratio))))
+        except Exception:
+            return False
+        return True

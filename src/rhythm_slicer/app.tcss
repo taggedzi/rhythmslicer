@@ -40,3 +40,10 @@ Screen {
     text-wrap: nowrap;
     text-overflow: ellipsis;
 }
+
+#progress {
+    height: 1;
+    width: 100%;
+    content-align: left middle;
+    text-wrap: nowrap;
+}

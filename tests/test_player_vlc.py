@@ -47,6 +47,9 @@ class FakeMediaPlayer:
     def set_time(self, value: int) -> None:
         self.time = value
 
+    def set_position(self, value: float) -> None:
+        self.position = value
+
 
 class FakeInstance:
     def __init__(self) -> None:
@@ -75,6 +78,7 @@ def test_player_state_and_positions(monkeypatch: pytest.MonkeyPatch) -> None:
     assert player.get_position_ms() == 1234
     assert player.get_length_ms() == 5678
     assert player.seek_ms(5000) is True
+    assert player.set_position_ratio(0.5) is True
 
 
 def test_missing_vlc_raises_error(monkeypatch: pytest.MonkeyPatch) -> None:

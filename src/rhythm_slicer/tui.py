@@ -64,6 +64,18 @@ def _display_state(state: str) -> str:
     return state.capitalize() if state else "Unknown"
 
 
+def ratio_from_click(x: int, width: int) -> float:
+    """Map a click x position to a 0..1 ratio."""
+    if width <= 1:
+        return 0.0
+    clamped = max(0, min(x, width - 1))
+    return clamped / float(width - 1)
+
+
+def target_ms_from_ratio(length_ms: int, ratio: float) -> int:
+    """Return a target time in ms for a ratio of track length."""
+    return int(max(0.0, min(1.0, ratio)) * max(0, length_ms))
+
 @dataclass
 class TuiMessage:
     text: str
@@ -109,12 +121,15 @@ class RhythmSlicerApp(App):
         self._scroll_offset = 0
         self._last_click_time = 0.0
         self._last_click_index: Optional[int] = None
+        self._scrub_active = False
         self._message: Optional[TuiMessage] = None
         self._header: Optional[Static] = None
         self._visualizer: Optional[Static] = None
         self._playlist_list: Optional[Static] = None
+        self._progress: Optional[Static] = None
         self._status: Optional[Static] = None
         self._last_state: Optional[str] = None
+        self._progress_tick = 0
 
     def compose(self) -> ComposeResult:
         with Vertical():
@@ -122,12 +137,14 @@ class RhythmSlicerApp(App):
             with Container(id="main"):
                 yield Static(id="playlist_list")
                 yield Static(id="visualizer")
+            yield Static(id="progress")
             yield Static(id="status")
 
     async def on_mount(self) -> None:
         self._header = self.query_one("#header", Static)
         self._visualizer = self.query_one("#visualizer", Static)
         self._playlist_list = self.query_one("#playlist_list", Static)
+        self._progress = self.query_one("#progress", Static)
         self._status = self.query_one("#status", Static)
         if self._visualizer:
             self._visualizer.border_title = "Visualizer"
@@ -179,10 +196,13 @@ class RhythmSlicerApp(App):
         return line
 
     def _on_tick(self) -> None:
+        self._progress_tick += 1
         if self._header:
             self._header.update(self._render_header())
         if self._visualizer:
             self._visualizer.update(self._render_visualizer())
+        if self._progress:
+            self._progress.update(self._render_progress())
         if self._status:
             self._status.update(self._render_status())
         state = self.player.get_state()
@@ -211,6 +231,22 @@ class RhythmSlicerApp(App):
         seed_ms = position if position is not None else int(time.time() * 1000)
         bars = visualizer_bars(seed_ms, width, height)
         return render_visualizer(bars, height)
+
+    def _render_progress(self) -> str:
+        if not self._progress:
+            return ""
+        size = getattr(self._progress, "size", None)
+        width = max(1, getattr(size, "width", 1) if size else 1)
+        length = self.player.get_length_ms()
+        if not length or length <= 0:
+            bar = ["-"] * width
+            pulse = self._progress_tick % max(1, width)
+            bar[pulse] = "="
+            return "".join(bar)
+        position = self.player.get_position_ms() or 0
+        ratio = min(1.0, max(0.0, position / float(length)))
+        filled = int(ratio * width)
+        return "=" * filled + "-" * max(0, width - filled)
 
     async def _populate_playlist(self) -> None:
         if not self._playlist_list or self.playlist is None:
@@ -271,6 +307,24 @@ class RhythmSlicerApp(App):
         seek = getattr(self.player, "seek_ms", None)
         if callable(seek):
             if seek(delta_ms):
+                return
+        self._set_message("Seek unsupported")
+
+    def _seek_to_ratio(self, ratio: float) -> None:
+        length = self.player.get_length_ms()
+        if not length or length <= 0:
+            self._set_message("Seek unsupported")
+            return
+        set_ratio = getattr(self.player, "set_position_ratio", None)
+        if callable(set_ratio):
+            if set_ratio(ratio):
+                return
+        position = self.player.get_position_ms() or 0
+        target = target_ms_from_ratio(length, ratio)
+        delta = target - position
+        seek = getattr(self.player, "seek_ms", None)
+        if callable(seek):
+            if seek(delta):
                 return
         self._set_message("Seek unsupported")
 
@@ -422,15 +476,27 @@ class RhythmSlicerApp(App):
         self._sync_selection()
 
     def on_mouse_down(self, event: events.MouseDown) -> None:
+        if self._progress and getattr(self._progress, "region", None):
+            region = self._progress.region
+            sx = getattr(event, "screen_x", event.x)
+            sy = getattr(event, "screen_y", event.y)
+            if region.contains(sx, sy):
+                ratio = ratio_from_click(int(sx - region.x), region.width)
+                self._seek_to_ratio(ratio)
+                self._scrub_active = True
+                event.stop()
+                return
         if not self._playlist_list:
             return
         region = getattr(self._playlist_list, "region", None)
-        if region and not region.contains(event.x, event.y):
+        sx = getattr(event, "screen_x", event.x)
+        sy = getattr(event, "screen_y", event.y)
+        if region and not region.contains(sx, sy):
             return
         row = (
-            int(event.y - region.y + 1)
+            int(sy - region.y - 1)
             if region
-            else int(getattr(event, "offset_y", event.y) + 1)
+            else int(getattr(event, "offset_y", event.y))
         )
         index = self._row_to_index(row)
         if index is None:
@@ -447,11 +513,32 @@ class RhythmSlicerApp(App):
         self._last_click_index = index
         self._last_click_time = now
 
+    def on_mouse_move(self, event: events.MouseMove) -> None:
+        if not self._scrub_active or not self._progress:
+            return
+        region = getattr(self._progress, "region", None)
+        if not region:
+            return
+        sx = getattr(event, "screen_x", event.x)
+        sy = getattr(event, "screen_y", event.y)
+        if not region.contains(sx, sy):
+            return
+        ratio = ratio_from_click(int(sx - region.x), region.width)
+        self._seek_to_ratio(ratio)
+        event.stop()
+
+    def on_mouse_up(self, event: events.MouseUp) -> None:
+        if self._scrub_active:
+            self._scrub_active = False
+            event.stop()
+
     def on_mouse_scroll_down(self, event: events.MouseScrollDown) -> None:
         if not self._playlist_list:
             return
         region = getattr(self._playlist_list, "region", None)
-        if region and not region.contains(event.x, event.y):
+        sx = getattr(event, "screen_x", event.x)
+        sy = getattr(event, "screen_y", event.y)
+        if region and not region.contains(sx, sy):
             return
         max_offset = (
             max(0, len(self.playlist.tracks) - self._playlist_view_height())
@@ -466,7 +553,9 @@ class RhythmSlicerApp(App):
         if not self._playlist_list:
             return
         region = getattr(self._playlist_list, "region", None)
-        if region and not region.contains(event.x, event.y):
+        sx = getattr(event, "screen_x", event.x)
+        sy = getattr(event, "screen_y", event.y)
+        if region and not region.contains(sx, sy):
             return
         self._scroll_offset = max(0, self._scroll_offset - 1)
         self._update_playlist_view()

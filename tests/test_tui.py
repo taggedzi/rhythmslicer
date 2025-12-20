@@ -102,6 +102,18 @@ def test_volume_adjustments() -> None:
     assert player.volume == 100
 
 
+def test_ratio_from_click() -> None:
+    assert tui.ratio_from_click(0, 10) == 0.0
+    assert tui.ratio_from_click(9, 10) == 1.0
+    assert tui.ratio_from_click(5, 11) == 0.5
+
+
+def test_target_ms_from_ratio() -> None:
+    assert tui.target_ms_from_ratio(1000, 0.0) == 0
+    assert tui.target_ms_from_ratio(1000, 0.5) == 500
+    assert tui.target_ms_from_ratio(1000, 1.0) == 1000
+
+
 def test_next_track_advances_playlist() -> None:
     tracks = [
         Track(path=Path("one.mp3"), title="one.mp3"),
