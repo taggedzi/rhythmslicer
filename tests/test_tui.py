@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 from pathlib import Path
 
 from rhythm_slicer import tui
@@ -163,6 +164,77 @@ def test_playlist_footer_after_removal() -> None:
     playlist.remove(1)
     app = tui.RhythmSlicerApp(player=DummyPlayer(), path="song.mp3", playlist=playlist)
     assert app._render_playlist_footer() == "Track: 2/2"
+
+
+def test_open_path_calls_set_playlist(tmp_path: Path, monkeypatch) -> None:
+    playlist = Playlist([Track(path=Path("one.mp3"), title="one.mp3")])
+    target = tmp_path / "music"
+    target.mkdir()
+
+    def fake_load(path: Path) -> Playlist:
+        assert path == target
+        return playlist
+
+    calls: list[tuple[Playlist, Path]] = []
+
+    async def fake_set(new_playlist: Playlist, source_path: Path) -> None:
+        calls.append((new_playlist, source_path))
+
+    app = tui.RhythmSlicerApp(player=DummyPlayer(), path="song.mp3")
+    monkeypatch.setattr(tui, "load_from_input", fake_load)
+    app.set_playlist_from_open = fake_set  # type: ignore[assignment]
+
+    asyncio.run(app._handle_open_path(str(target)))
+    assert calls == [(playlist, target)]
+
+
+def test_open_path_missing_shows_message(tmp_path: Path) -> None:
+    missing = tmp_path / "missing"
+    app = tui.RhythmSlicerApp(player=DummyPlayer(), path="song.mp3")
+    asyncio.run(app._handle_open_path(str(missing)))
+    assert app._message is not None
+    assert app._message.text == "Path not found"
+
+
+def test_open_path_empty_playlist_shows_message(monkeypatch, tmp_path: Path) -> None:
+    target = tmp_path / "empty.m3u"
+    target.write_text("", encoding="utf-8")
+
+    def fake_load(path: Path) -> Playlist:
+        assert path == target
+        return Playlist([])
+
+    player = DummyPlayer()
+    app = tui.RhythmSlicerApp(player=player, path="song.mp3")
+    monkeypatch.setattr(tui, "load_from_input", fake_load)
+
+    asyncio.run(app._handle_open_path(str(target)))
+    assert app._message is not None
+    assert app._message.text == "No supported audio files found"
+    assert player.play_calls == 0
+
+
+def test_open_path_recursive_loads_sorted_tracks(tmp_path: Path) -> None:
+    root = tmp_path / "music"
+    sub = root / "sub"
+    sub.mkdir(parents=True)
+    (root / "b.mp3").write_text("b", encoding="utf-8")
+    (sub / "a.mp3").write_text("a", encoding="utf-8")
+
+    calls: list[Playlist] = []
+
+    async def fake_set(new_playlist: Playlist, source_path: Path) -> None:
+        calls.append(new_playlist)
+
+    app = tui.RhythmSlicerApp(player=DummyPlayer(), path="song.mp3")
+    app.set_playlist_from_open = fake_set  # type: ignore[assignment]
+
+    asyncio.run(app._handle_open_path(str(root), recursive=True))
+    assert len(calls) == 1
+    titles = [track.title for track in calls[0].tracks]
+    assert titles == ["b.mp3", "a.mp3"]
+    assert app._message is not None
+    assert app._message.text == "Loaded 2 tracks (recursive)"
 
 
 def test_next_prev_respects_wrap() -> None:

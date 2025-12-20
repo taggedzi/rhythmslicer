@@ -53,6 +53,7 @@ PlaylistPrompt {
 }
 
 #playlist_prompt {
+    layout: vertical;
     width: 60%;
     max-width: 80;
     min-width: 40;
@@ -64,20 +65,39 @@ PlaylistPrompt {
 #prompt_title {
     width: 100%;
     content-align: left middle;
+    margin-bottom: 1;
 }
 
 #prompt_input {
     width: 100%;
+    margin-bottom: 1;
+}
+
+#prompt_hint {
+    width: 100%;
+    content-align: left middle;
+    margin-bottom: 1;
 }
 
 #prompt_buttons {
     width: 100%;
-    height: 1;
+    height: 3;
+    margin-top: 1;
     align: right middle;
 }
 
 #prompt_absolute {
     width: 100%;
-    height: 1;
+    height: 3;
+    padding: 0 1;
     content-align: left middle;
+    margin-bottom: 1;
+}
+
+#prompt_recursive {
+    width: 100%;
+    height: 3;
+    padding: 0 1;
+    content-align: left middle;
+    margin-bottom: 1;
 }

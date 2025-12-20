@@ -22,7 +22,7 @@ except Exception as exc:  # pragma: no cover - depends on environment
     ) from exc
 
 from rhythm_slicer.player_vlc import VlcPlayer
-from rhythm_slicer.playlist import Playlist, load_from_input
+from rhythm_slicer.playlist import Playlist, Track, load_from_input, SUPPORTED_EXTENSIONS
 
 
 def visualizer_bars(seed_ms: int, width: int, height: int) -> list[int]:
@@ -124,7 +124,7 @@ class RhythmSlicerApp(App):
         Binding("r", "cycle_repeat", "Repeat Mode"),
         Binding("h", "toggle_shuffle", "Shuffle"),
         Binding("ctrl+s", "save_playlist", "Save Playlist"),
-        Binding("ctrl+o", "load_playlist", "Load Playlist"),
+        Binding("ctrl+o", "open", "Open"),
         Binding("q", "quit_app", "Quit"),
     ]
 
@@ -155,6 +155,7 @@ class RhythmSlicerApp(App):
         self._play_order_pos = -1
         self._rng = rng or random.Random()
         self._last_playlist_path: Optional[Path] = None
+        self._last_open_path: Optional[Path] = None
         self._message: Optional[TuiMessage] = None
         self._playing_index: Optional[int] = None
         self._header: Optional[Static] = None
@@ -317,6 +318,20 @@ class RhythmSlicerApp(App):
         self._reset_play_order()
         await self._populate_playlist()
         self._sync_selection()
+
+    async def set_playlist_from_open(
+        self, playlist: Playlist, source_path: Path
+    ) -> None:
+        self.playlist = playlist
+        self.playlist.set_index(0)
+        self._filename = source_path.name
+        self._scroll_offset = 0
+        self._reset_play_order()
+        await self._populate_playlist()
+        self._sync_selection()
+        self._last_open_path = source_path
+        if not self._play_current_track():
+            self._skip_failed_track()
 
     def _play_current_track(self) -> bool:
         if not self.playlist or self.playlist.is_empty():
@@ -520,6 +535,9 @@ class RhythmSlicerApp(App):
 
     async def action_load_playlist(self) -> None:
         self.run_worker(self._load_playlist_flow(), exclusive=True)
+
+    async def action_open(self) -> None:
+        self.run_worker(self._open_flow(), exclusive=True)
 
     def _update_playlist_view(self) -> None:
         if not self._playlist_list or not self.playlist:
@@ -814,6 +832,34 @@ class RhythmSlicerApp(App):
         else:
             self._set_message(f"Loaded playlist: {path}")
 
+    async def _open_flow(self) -> None:
+        default = str(self._last_open_path) if self._last_open_path else ""
+        result = await self.push_screen_wait(OpenPrompt(default))
+        if not result:
+            return
+        path_str, recursive = _parse_open_prompt_result(result)
+        await self._handle_open_path(path_str, recursive=recursive)
+
+    async def _handle_open_path(self, path_str: str, *, recursive: bool = False) -> None:
+        path = Path(path_str).expanduser()
+        if not path.exists():
+            self._set_message("Path not found")
+            return
+        try:
+            if recursive and path.is_dir():
+                new_playlist = _load_recursive_directory(path)
+            else:
+                new_playlist = load_from_input(path)
+        except Exception as exc:
+            self._set_message(f"Load failed: {exc}")
+            return
+        if new_playlist.is_empty():
+            self._set_message("No supported audio files found")
+            return
+        await self.set_playlist_from_open(new_playlist, source_path=path)
+        suffix = " (recursive)" if recursive and path.is_dir() else ""
+        self._set_message(f"Loaded {len(new_playlist.tracks)} tracks{suffix}")
+
 
 class PlaylistPrompt(ModalScreen[Optional[str]]):
     """Modal prompt for playlist paths."""
@@ -892,6 +938,70 @@ class PlaylistPrompt(ModalScreen[Optional[str]]):
                 self.dismiss(None)
 
 
+class OpenPrompt(ModalScreen[Optional[str]]):
+    """Modal prompt for opening a path."""
+
+    def __init__(self, default_path: str) -> None:
+        super().__init__()
+        self._default_path = default_path
+        self._recursive = False
+
+    def compose(self) -> ComposeResult:
+        with Container(id="playlist_prompt"):
+            yield Static("Open", id="prompt_title")
+            yield Input(value=self._default_path, id="prompt_input")
+            yield Static(
+                "Enter a folder, audio file, or .m3u/.m3u8 playlist path",
+                id="prompt_hint",
+            )
+            yield Button(
+                "Load subfolders recursively: Off",
+                id="prompt_recursive",
+            )
+            with Horizontal(id="prompt_buttons"):
+                yield Button("Open", id="prompt_open")
+                yield Button("Cancel", id="prompt_cancel")
+
+    def on_mount(self) -> None:
+        self.query_one("#prompt_input", Input).focus()
+
+    def _toggle_recursive(self) -> None:
+        self._recursive = not self._recursive
+        label = (
+            "Load subfolders recursively: On"
+            if self._recursive
+            else "Load subfolders recursively: Off"
+        )
+        self.query_one("#prompt_recursive", Button).label = label
+
+    def _confirm(self) -> None:
+        value = self.query_one("#prompt_input", Input).value.strip()
+        if value:
+            self.dismiss(_format_open_prompt_result(value, self._recursive))
+        else:
+            self.dismiss(None)
+
+    def on_button_pressed(self, event: Button.Pressed) -> None:
+        if event.button.id == "prompt_recursive":
+            self._toggle_recursive()
+            return
+        if event.button.id == "prompt_open":
+            self._confirm()
+        else:
+            self.dismiss(None)
+
+    def on_key(self, event: events.Key) -> None:
+        if event.key == "escape":
+            self.dismiss(None)
+            return
+        if event.key == "ctrl+r":
+            self._toggle_recursive()
+            return
+        if event.key == "enter":
+            if isinstance(self.app.focused, Input):
+                self._confirm()
+
+
 def _truncate_line(text: str, max_width: int) -> str:
     if max_width <= 0:
         return ""
@@ -907,6 +1017,28 @@ def _parse_prompt_result(value: str) -> tuple[str, bool]:
         return value, False
     path, raw = value.rsplit("::abs=", 1)
     return path, raw.strip() == "1"
+
+
+def _format_open_prompt_result(path: str, recursive: bool) -> str:
+    return f"{path}::recursive={int(recursive)}"
+
+
+def _parse_open_prompt_result(value: str) -> tuple[str, bool]:
+    if "::recursive=" not in value:
+        return value, False
+    path, raw = value.rsplit("::recursive=", 1)
+    return path, raw.strip() == "1"
+
+
+def _load_recursive_directory(path: Path) -> Playlist:
+    files = [
+        entry
+        for entry in path.rglob("*")
+        if entry.is_file() and entry.suffix.lower() in SUPPORTED_EXTENSIONS
+    ]
+    files.sort(key=lambda entry: entry.relative_to(path).as_posix().lower())
+    tracks = [Track(path=entry, title=entry.name) for entry in files]
+    return Playlist(tracks)
 
 
 def run_tui(path: str, player: VlcPlayer) -> int:
