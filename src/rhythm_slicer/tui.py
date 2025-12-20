@@ -230,6 +230,7 @@ class RhythmSlicerApp(App):
         self._viewport_height = 1
         self._last_visualizer_text: Optional[str] = None
         self._viz_prefs: dict[str, object] = {}
+        self._viz_restart_timer: Optional[object] = None
 
     def compose(self) -> ComposeResult:
         with Vertical():
@@ -244,7 +245,7 @@ class RhythmSlicerApp(App):
                             yield Button("S:OFF", id="shuffle_toggle")
                         yield Horizontal(
                             Button(Text("[<<]"), id="key_prev", classes="transport_key"),
-                            Button(Text("[ PLAY ]"), id="key_playpause", classes="transport_key"),
+                            Button(Text("[ PLAY ] "), id="key_playpause", classes="transport_key"),
                             Button(Text("[ STOP ]"), id="key_stop", classes="transport_key"),
                             Button(Text("[>>]"), id="key_next", classes="transport_key"),
                             id="transport_row",
@@ -355,7 +356,7 @@ class RhythmSlicerApp(App):
 
     def _render_transport_label(self) -> Text:
         state = (self.player.get_state() or "").lower()
-        return Text("[ PAUSE ]") if "playing" in state else Text("[ PLAY ]")
+        return Text("[ PAUSE ]") if "playing" in state else Text("[ PLAY ] ")
 
     def _update_transport_row(self) -> None:
         try:
@@ -492,7 +493,11 @@ class RhythmSlicerApp(App):
             return False
         self._playing_index = self.playlist.index
         self._sync_selection()
-        self._start_hackscript(track.path)
+        self._start_hackscript(
+            track.path,
+            playback_pos_ms=self._get_playback_position_ms(),
+            playback_state=self._get_playback_state(),
+        )
         return True
 
     def _advance_track(self, auto: bool = False) -> None:
@@ -527,12 +532,13 @@ class RhythmSlicerApp(App):
         self.player.stop()
         self._stop_hackscript()
 
-    def _try_seek(self, delta_ms: int) -> None:
+    def _try_seek(self, delta_ms: int) -> bool:
         seek = getattr(self.player, "seek_ms", None)
         if callable(seek):
             if seek(delta_ms):
-                return
+                return True
         self._set_message("Seek unsupported")
+        return False
 
     def _get_playback_position_ms(self) -> int | None:
         getter = getattr(self.player, "get_position_ms", None)
@@ -543,35 +549,83 @@ class RhythmSlicerApp(App):
         except Exception:
             return None
 
-    def _seek_to_ratio(self, ratio: float) -> None:
+    def _get_playback_state(self) -> str:
+        state = (self.player.get_state() or "").lower()
+        if "paused" in state:
+            return "paused"
+        return "playing"
+
+    def _restart_hackscript_from_player(self) -> None:
+        if self._viz_restart_timer is not None:
+            stopper = getattr(self._viz_restart_timer, "stop", None)
+            if callable(stopper):
+                stopper()
+            self._viz_restart_timer = None
+        if not self._current_track_path:
+            return
+        pos_ms = self._get_playback_position_ms()
+        state = self._get_playback_state()
+        self._restart_hackscript(
+            playback_pos_ms=pos_ms,
+            playback_state=state,
+        )
+
+    def _schedule_viz_restart(self, delay: float = 0.2) -> None:
+        if not self._current_track_path:
+            return
+        if self._viz_restart_timer is not None:
+            stopper = getattr(self._viz_restart_timer, "stop", None)
+            if callable(stopper):
+                stopper()
+        self._viz_restart_timer = self.set_timer(
+            delay, self._restart_hackscript_from_player
+        )
+
+    def _seek_to_ratio(self, ratio: float) -> bool:
         length = self.player.get_length_ms()
         if not length or length <= 0:
             self._set_message("Seek unsupported")
-            return
+            return False
         set_ratio = getattr(self.player, "set_position_ratio", None)
         if callable(set_ratio):
             if set_ratio(ratio):
-                return
+                self._schedule_viz_restart()
+                return True
         position = self.player.get_position_ms() or 0
         target = target_ms_from_ratio(length, ratio)
         delta = target - position
         seek = getattr(self.player, "seek_ms", None)
         if callable(seek):
             if seek(delta):
-                return
+                self._schedule_viz_restart()
+                return True
         self._set_message("Seek unsupported")
+        return False
 
     def action_toggle_playback(self) -> None:
         state = (self.player.get_state() or "").lower()
         if "playing" in state:
             self.player.pause()
             self._set_message("Paused")
+            desired_state = "paused"
         elif "paused" in state:
             self.player.play()
             self._set_message("Playing")
+            desired_state = "playing"
         else:
+            if self.playlist and not self.playlist.is_empty():
+                if self._play_current_track():
+                    self._set_message("Playing")
+                    return
+                return
             self.player.play()
             self._set_message("Playing")
+            desired_state = "playing"
+        pos_ms = self._get_playback_position_ms()
+        self._restart_hackscript(
+            playback_pos_ms=pos_ms,
+            playback_state=desired_state,
+        )
 
     def action_stop(self) -> None:
         self.player.stop()
@@ -580,10 +634,12 @@ class RhythmSlicerApp(App):
         self._set_message("Stopped")
 
     def action_seek_back(self) -> None:
-        self._try_seek(-5000)
+        if self._try_seek(-5000):
+            self._schedule_viz_restart()
 
     def action_seek_forward(self) -> None:
-        self._try_seek(5000)
+        if self._try_seek(5000):
+            self._schedule_viz_restart()
 
     def action_volume_up(self) -> None:
         self._volume = min(100, self._volume + 5)
@@ -718,7 +774,7 @@ class RhythmSlicerApp(App):
         self._viz_name = selection
         self._save_config()
         if self._current_track_path:
-            self._restart_hackscript()
+            self._restart_hackscript_from_player()
         self._set_message(f"Visualization: {selection}")
 
     async def action_save_playlist(self) -> None:
@@ -904,8 +960,7 @@ class RhythmSlicerApp(App):
         self._update_visualizer_viewport()
         self._update_playlist_view()
         if self._current_track_path:
-            resume_ms = self._get_playback_position_ms()
-            self._restart_hackscript(playback_pos_ms=resume_ms)
+            self._restart_hackscript_from_player()
         elif self._visualizer and not self._frame_player.is_running:
             self._visualizer.update(self._render_visualizer())
 
@@ -1141,18 +1196,24 @@ class RhythmSlicerApp(App):
             self._visualizer.update(clipped)
 
     def _start_hackscript(
-        self, track_path: Path, *, playback_pos_ms: int | None = None
+        self,
+        track_path: Path,
+        *,
+        playback_pos_ms: int | None = None,
+        playback_state: str = "playing",
     ) -> None:
         self._update_visualizer_viewport()
         resolved = track_path.expanduser().resolve()
         self._current_track_path = resolved
+        if playback_pos_ms is None:
+            playback_pos_ms = 0
         prefs = {
             "show_absolute_paths": False,
             "viz": self._viz_name,
             "ansi_colors": self._ansi_colors,
+            "playback_pos_ms": playback_pos_ms,
+            "playback_state": playback_state,
         }
-        if playback_pos_ms is not None:
-            prefs["playback_pos_ms"] = playback_pos_ms
         self._viz_prefs = dict(prefs)
         frames = generate_hackscript(
             resolved,
@@ -1162,11 +1223,18 @@ class RhythmSlicerApp(App):
         )
         self._frame_player.start(frames)
 
-    def _restart_hackscript(self, *, playback_pos_ms: int | None = None) -> None:
+    def _restart_hackscript(
+        self,
+        *,
+        playback_pos_ms: int | None = None,
+        playback_state: str = "playing",
+    ) -> None:
         if not self._current_track_path:
             return
         self._start_hackscript(
-            self._current_track_path, playback_pos_ms=playback_pos_ms
+            self._current_track_path,
+            playback_pos_ms=playback_pos_ms,
+            playback_state=playback_state,
         )
 
     def _stop_hackscript(self) -> None:
@@ -1174,6 +1242,11 @@ class RhythmSlicerApp(App):
         self._current_track_path = None
         self._last_visualizer_text = None
         self._viz_prefs = {}
+        if self._viz_restart_timer is not None:
+            stopper = getattr(self._viz_restart_timer, "stop", None)
+            if callable(stopper):
+                stopper()
+            self._viz_restart_timer = None
         if self._visualizer:
             self._visualizer.update(self._render_visualizer())
 

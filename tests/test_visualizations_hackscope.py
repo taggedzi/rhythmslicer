@@ -155,3 +155,43 @@ def test_hackscope_resume_uses_locate_phase(monkeypatch) -> None:
     frame = next(hackscope.generate_frames(ctx))
     assert frame
     assert called["value"]
+
+
+def test_hackscope_paused_freezes_frames() -> None:
+    ctx = VizContext(
+        track_path="song.mp3",
+        viewport_w=40,
+        viewport_h=10,
+        prefs={
+            "fps": 20.0,
+            "playback_pos_ms": 30000,
+            "playback_state": "paused",
+        },
+        meta={"title": "Song", "artist": "Artist", "duration_sec": 120},
+        seed=321,
+    )
+    gen = generate_frames(ctx)
+    frames = [next(gen) for _ in range(3)]
+    assert frames[0] == frames[1] == frames[2]
+    lines = _strip_sgr(frames[0]).splitlines()
+    assert len(lines) == ctx.viewport_h
+    assert all(len(line) == ctx.viewport_w for line in lines)
+
+
+def test_hackscope_playing_advances_frames() -> None:
+    ctx = VizContext(
+        track_path="song.mp3",
+        viewport_w=40,
+        viewport_h=10,
+        prefs={
+            "fps": 20.0,
+            "playback_pos_ms": 0,
+            "playback_state": "playing",
+        },
+        meta={"title": "Song", "artist": "Artist", "duration_sec": 120},
+        seed=321,
+    )
+    gen = generate_frames(ctx)
+    first = next(gen)
+    second = next(gen)
+    assert first != second

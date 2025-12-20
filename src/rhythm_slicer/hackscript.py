@@ -239,6 +239,12 @@ def _build_parser() -> argparse.ArgumentParser:
         default=None,
         help="Playback position in milliseconds",
     )
+    parser.add_argument(
+        "--state",
+        choices=("playing", "paused"),
+        default="playing",
+        help="Playback state",
+    )
     parser.add_argument("--seed", type=int, default=None, help="Seed override")
     parser.add_argument("--viz", default="hackscope", help="Visualization name")
     parser.add_argument("--fps", type=float, default=20.0, help="Frames per second")
@@ -251,6 +257,7 @@ def main(argv: list[str] | None = None) -> int:
     prefs = _parse_prefs(args.prefs)
     if args.pos_ms is not None:
         prefs["playback_pos_ms"] = args.pos_ms
+    prefs["playback_state"] = args.state
     if "fps" not in prefs and args.fps:
         prefs["fps"] = args.fps
     viewport = (max(1, args.width), max(1, args.height))

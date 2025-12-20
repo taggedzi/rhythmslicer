@@ -819,6 +819,8 @@ def generate_frames(ctx: VizContext) -> Iterator[str]:
     use_ansi = bool(ctx.prefs.get("ansi_colors", True))
     seed = ctx.seed if ctx.seed is not None else _stable_seed(ctx.track_path)
     stage_id = f"{seed:08x}"
+    state = str(ctx.prefs.get("playback_state", "playing")).lower()
+    paused = state == "paused"
     duration_sec = _safe_int(meta.get("duration_sec", 0), 0)
     coverage = _safe_float(ctx.prefs.get("hackscope_coverage", 0.85), 0.85)
     min_show = _safe_int(ctx.prefs.get("hackscope_min_show_sec", 45), 45)
@@ -859,8 +861,9 @@ def generate_frames(ctx: VizContext) -> Iterator[str]:
 
     global_frame = start_frame
     while True:
-        if global_frame < total_scripted:
-            phase_name, local_i = locate_phase(global_frame, phase_list)
+        frame_index = start_frame if paused else global_frame
+        if frame_index < total_scripted:
+            phase_name, local_i = locate_phase(frame_index, phase_list)
             phase_len = phase_len_map.get(phase_name, 1)
             if phase_name == "BOOT":
                 frame = render_boot(
@@ -969,7 +972,7 @@ def generate_frames(ctx: VizContext) -> Iterator[str]:
                     use_ansi=use_ansi,
                 )
         else:
-            idle_i = global_frame - total_scripted
+            idle_i = frame_index - total_scripted
             frame = render_idle(
                 stage_id,
                 ctx.track_path,
@@ -981,4 +984,5 @@ def generate_frames(ctx: VizContext) -> Iterator[str]:
                 use_ansi=use_ansi,
             )
         yield frame
-        global_frame += 1
+        if not paused:
+            global_frame += 1

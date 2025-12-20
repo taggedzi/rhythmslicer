@@ -45,6 +45,8 @@ def generate_frames(ctx: VizContext) -> Iterator[str]:
     width = max(1, int(ctx.viewport_w))
     height = max(1, int(ctx.viewport_h))
     prefs = ctx.prefs if isinstance(ctx.prefs, dict) else {}
+    state = str(prefs.get("playback_state", "playing")).lower()
+    paused = state == "paused"
     header_enabled = bool(prefs.get("matrix_header", True))
     density = prefs.get("matrix_density", 0.55)
     try:
@@ -52,6 +54,14 @@ def generate_frames(ctx: VizContext) -> Iterator[str]:
     except Exception:
         density = 0.55
     density = _clamp_float(density, 0.0, 1.0)
+    fps = prefs.get("fps", 20.0)
+    try:
+        fps_value = float(fps)
+    except Exception:
+        fps_value = 20.0
+    fps_value = max(1.0, fps_value)
+    start_ms = int(prefs.get("playback_pos_ms", 0) or 0)
+    start_frame = max(0, int((start_ms / 1000.0) * fps_value))
     speed_mult = prefs.get("matrix_speed", 1.0)
     try:
         speed_mult = float(speed_mult)
@@ -74,11 +84,31 @@ def generate_frames(ctx: VizContext) -> Iterator[str]:
 
     spawn_rate = max(0.02, density * 0.08)
 
-    while True:
+    def render_frame() -> str:
+        if header_enabled:
+            header = _header_line(ctx, width)
+            if height == 1:
+                return header
+            lines = ["".join(row).ljust(width) for row in grid]
+            while len(lines) < rain_height:
+                lines.append(" " * width)
+            return "\n".join([header] + lines[: rain_height])
+        if height == 1:
+            if rain_height == 0:
+                return " " * width
+            line = "".join(grid[0]) if grid else ""
+            return line.ljust(width)[:width]
+        lines = ["".join(row).ljust(width) for row in grid]
+        while len(lines) < height:
+            lines.append(" " * width)
+        return "\n".join(lines[:height])
+
+    def step_frame() -> str:
+        nonlocal drops
         if rain_height > 0:
-            grid = [[" " for _ in range(width)] for _ in range(rain_height)]
+            new_grid = [[" " for _ in range(width)] for _ in range(rain_height)]
         else:
-            grid = []
+            new_grid = []
         for col in range(width):
             state = drops[col]
             active = bool(state.get("active"))
@@ -103,30 +133,22 @@ def generate_frames(ctx: VizContext) -> Iterator[str]:
             start = max(0, tail)
             end = min(rain_height - 1, head)
             for row in range(start, end + 1):
-                if row == head:
-                    ch = charset[rng.randrange(len(charset))]
-                else:
-                    ch = charset[rng.randrange(len(charset))]
-                grid[row][col] = ch
-
-        if header_enabled:
-            header = _header_line(ctx, width)
-            if height == 1:
-                yield header
-                continue
-            lines = ["".join(row).ljust(width) for row in grid]
-            while len(lines) < rain_height:
-                lines.append(" " * width)
-            yield "\n".join([header] + lines[: rain_height])
+                ch = charset[rng.randrange(len(charset))]
+                new_grid[row][col] = ch
+        if rain_height > 0:
+            grid[:] = new_grid
         else:
-            if height == 1:
-                if rain_height == 0:
-                    yield " " * width
-                else:
-                    line = "".join(grid[0]) if grid else ""
-                    yield line.ljust(width)[:width]
-                continue
-            lines = ["".join(row).ljust(width) for row in grid]
-            while len(lines) < height:
-                lines.append(" " * width)
-            yield "\n".join(lines[:height])
+            grid[:] = []
+        return render_frame()
+
+    grid: list[list[str]] = []
+    for _ in range(start_frame):
+        step_frame()
+
+    if paused:
+        frozen = step_frame()
+        while True:
+            yield frozen
+
+    while True:
+        yield step_frame()
