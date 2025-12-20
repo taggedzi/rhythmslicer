@@ -186,14 +186,16 @@ class RhythmSlicerApp(App):
                             yield Static(id="playlist_footer_track")
                             yield Button("R:OFF", id="repeat_toggle")
                             yield Button("S:OFF", id="shuffle_toggle")
+                        yield Horizontal(
+                            Button(Text("[<<]"), id="key_prev", classes="transport_key"),
+                            Button(Text("[ PLAY ]"), id="key_playpause", classes="transport_key"),
+                            Button(Text("[ STOP ]"), id="key_stop", classes="transport_key"),
+                            Button(Text("[>>]"), id="key_next", classes="transport_key"),
+                            id="transport_row",
+                        )
                 with Container(id="visuals_pane"):
                     yield Static(id="visualizer")
             yield Static(id="progress")
-            with Horizontal(id="transport_row"):
-                yield Button("<<", id="transport_prev")
-                yield Button("PLAY", id="transport_play_pause")
-                yield Button("STOP", id="transport_stop")
-                yield Button(">>", id="transport_next")
             yield Static(id="status")
 
     async def on_mount(self) -> None:
@@ -292,16 +294,26 @@ class RhythmSlicerApp(App):
             return Text("S:ON", style="#9cff57")
         return Text("S:OFF", style="#8a93a3")
 
-    def _render_transport_label(self) -> str:
+    def _render_transport_label(self) -> Text:
         state = (self.player.get_state() or "").lower()
-        return "PAUSE" if "playing" in state else "PLAY"
+        return Text("[ PAUSE ]") if "playing" in state else Text("[ PLAY ]")
 
     def _update_transport_row(self) -> None:
         try:
-            button = self.query_one("#transport_play_pause", Button)
+            label = self.query_one("#key_playpause", Button)
         except Exception:
             return
-        button.label = self._render_transport_label()
+        label.label = self._render_transport_label()
+
+    def _handle_transport_action(self, control_id: str) -> None:
+        if control_id == "key_prev":
+            self.action_previous_track()
+        elif control_id == "key_playpause":
+            self.action_toggle_playback()
+        elif control_id == "key_stop":
+            self.action_stop()
+        elif control_id == "key_next":
+            self.action_next_track()
 
 
     def _on_tick(self) -> None:
@@ -541,14 +553,8 @@ class RhythmSlicerApp(App):
             self.action_cycle_repeat()
         elif event.button.id == "shuffle_toggle":
             self.action_toggle_shuffle()
-        elif event.button.id == "transport_prev":
-            self.action_previous_track()
-        elif event.button.id == "transport_play_pause":
-            self.action_toggle_playback()
-        elif event.button.id == "transport_stop":
-            self.action_stop()
-        elif event.button.id == "transport_next":
-            self.action_next_track()
+        elif event.button.id:
+            self._handle_transport_action(event.button.id)
 
     def action_move_up(self) -> None:
         if not self.playlist or self.playlist.is_empty():
