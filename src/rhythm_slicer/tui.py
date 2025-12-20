@@ -194,6 +194,7 @@ class RhythmSlicerApp(App):
         self._header = self.query_one("#header", Static)
         self._visualizer = self.query_one("#visualizer", Static)
         self._playlist_list = self.query_one("#playlist_list", Static)
+        self._playlist_list.can_focus = True
         playlist_pane = self.query_one("#playlist_pane", Container)
         playlist_pane.border_title = "Playlist"
         self._progress = self.query_one("#progress", Static)
@@ -536,6 +537,12 @@ class RhythmSlicerApp(App):
         if not self.playlist or self.playlist.is_empty():
             self._set_message("No tracks loaded")
             return
+        try:
+            focused = self.focused
+        except Exception:
+            focused = self._playlist_list
+        if focused is not None and focused is not self._playlist_list:
+            return
         self._play_selected()
 
     def action_remove_selected(self) -> None:
@@ -726,13 +733,14 @@ class RhythmSlicerApp(App):
         if region and not region.contains(sx, sy):
             return
         row = (
-            int(sy - region.y - 1)
+            int(sy - region.y)
             if region
             else int(getattr(event, "offset_y", event.y))
         )
         index = self._row_to_index(row)
         if index is None:
             return
+        self.set_focus(self._playlist_list)
         now = self._now()
         if (
             self._last_click_index == index
@@ -763,6 +771,7 @@ class RhythmSlicerApp(App):
         if self._scrub_active:
             self._scrub_active = False
             event.stop()
+
 
     def on_mouse_scroll_down(self, event: events.MouseScrollDown) -> None:
         if not self._playlist_list:
