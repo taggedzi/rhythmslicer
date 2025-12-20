@@ -47,3 +47,31 @@ Screen {
     content-align: left middle;
     text-wrap: nowrap;
 }
+
+PlaylistPrompt {
+    align: center middle;
+}
+
+#playlist_prompt {
+    width: 60%;
+    max-width: 80;
+    min-width: 40;
+    padding: 1 2;
+    border: round $accent;
+    background: $panel;
+}
+
+#prompt_title {
+    width: 100%;
+    content-align: left middle;
+}
+
+#prompt_input {
+    width: 100%;
+}
+
+#prompt_buttons {
+    width: 100%;
+    height: 1;
+    align: right middle;
+}

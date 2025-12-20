@@ -85,25 +85,9 @@ def load_from_directory(directory: Path) -> Playlist:
 
 
 def load_from_m3u(m3u_path: Path) -> Playlist:
-    tracks: list[Track] = []
-    base = m3u_path.parent
-    try:
-        lines = m3u_path.read_text(encoding="utf-8").splitlines()
-    except FileNotFoundError:
-        return Playlist([])
-    for line in lines:
-        entry = line.strip()
-        if not entry or entry.startswith("#"):
-            continue
-        path = Path(entry)
-        if not path.is_absolute():
-            path = (base / path).resolve()
-        if not path.exists() or not path.is_file():
-            continue
-        if not _is_supported(path):
-            continue
-        tracks.append(_track_from_path(path))
-    return Playlist(tracks)
+    from rhythm_slicer.playlist_io import load_m3u_any
+
+    return load_m3u_any(m3u_path)
 
 
 def load_from_input(path: Path) -> Playlist:

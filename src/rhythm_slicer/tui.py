@@ -12,16 +12,17 @@ from typing import Callable, Optional
 try:
     from textual.app import App, ComposeResult
     from textual.binding import Binding
-    from textual.containers import Container, Vertical
+    from textual.containers import Container, Horizontal, Vertical
     from textual import events
-    from textual.widgets import Static
+    from textual.screen import ModalScreen
+    from textual.widgets import Button, Input, Static
 except Exception as exc:  # pragma: no cover - depends on environment
     raise RuntimeError(
         "Textual is required for the TUI. Install the 'textual' dependency."
     ) from exc
 
 from rhythm_slicer.player_vlc import VlcPlayer
-from rhythm_slicer.playlist import Playlist, Track, load_from_input
+from rhythm_slicer.playlist import Playlist, load_from_input
 
 
 def visualizer_bars(seed_ms: int, width: int, height: int) -> list[int]:
@@ -121,6 +122,8 @@ class RhythmSlicerApp(App):
         Binding("-", "volume_down", "Volume -5"),
         Binding("r", "cycle_repeat", "Repeat Mode"),
         Binding("h", "toggle_shuffle", "Shuffle"),
+        Binding("ctrl+s", "save_playlist", "Save Playlist"),
+        Binding("ctrl+o", "load_playlist", "Load Playlist"),
         Binding("q", "quit_app", "Quit"),
     ]
 
@@ -150,6 +153,7 @@ class RhythmSlicerApp(App):
         self._play_order: list[int] = []
         self._play_order_pos = -1
         self._rng = rng or random.Random()
+        self._last_playlist_path: Optional[Path] = None
         self._message: Optional[TuiMessage] = None
         self._header: Optional[Static] = None
         self._visualizer: Optional[Static] = None
@@ -178,9 +182,7 @@ class RhythmSlicerApp(App):
             self._visualizer.border_title = "Visualizer"
         if self.playlist is None:
             self.playlist = load_from_input(Path(self.path))
-        self._reset_play_order()
-        await self._populate_playlist()
-        self._sync_selection()
+        await self.set_playlist(self.playlist, preserve_path=None)
         if self.playlist and not self.playlist.is_empty():
             if not self._play_current_track():
                 self._skip_failed_track()
@@ -213,7 +215,7 @@ class RhythmSlicerApp(App):
                 title = track.title
         repeat_label = self._repeat_mode.capitalize()
         shuffle_label = "On" if self._shuffle else "Off"
-        hotkeys = "Keys: Space S ←/→ N/P Enter Q + - R H"
+        hotkeys = "Keys: Space S ←/→ N/P Enter Q + - R H Ctrl+S Ctrl+O"
         message = self._pop_message()
         track_count = len(self.playlist.tracks) if self.playlist else 0
         base = (
@@ -294,6 +296,25 @@ class RhythmSlicerApp(App):
         if not self._playlist_list or not self.playlist or self.playlist.is_empty():
             return
         self._set_selected(self.playlist.index)
+
+    async def set_playlist(
+        self, playlist: Playlist, *, preserve_path: Optional[Path]
+    ) -> None:
+        """Replace the current playlist and refresh UI state."""
+        self.playlist = playlist
+        self._scroll_offset = 0
+        if preserve_path and playlist.tracks:
+            for idx, track in enumerate(playlist.tracks):
+                if track.path == preserve_path:
+                    playlist.set_index(idx)
+                    break
+            else:
+                playlist.set_index(0)
+        elif playlist.tracks:
+            playlist.set_index(0)
+        self._reset_play_order()
+        await self._populate_playlist()
+        self._sync_selection()
 
     def _play_current_track(self) -> bool:
         if not self.playlist or self.playlist.is_empty():
@@ -451,6 +472,15 @@ class RhythmSlicerApp(App):
         self._shuffle = not self._shuffle
         self._reset_play_order()
         self._set_message(f"Shuffle: {'on' if self._shuffle else 'off'}")
+
+    async def action_save_playlist(self) -> None:
+        if not self.playlist or self.playlist.is_empty():
+            self._set_message("No tracks to save")
+            return
+        self.run_worker(self._save_playlist_flow(), exclusive=True)
+
+    async def action_load_playlist(self) -> None:
+        self.run_worker(self._load_playlist_flow(), exclusive=True)
 
     def _update_playlist_view(self) -> None:
         if not self._playlist_list or not self.playlist:
@@ -664,6 +694,87 @@ class RhythmSlicerApp(App):
             prev_pos = len(self._play_order) - 1
         self._play_order_pos = prev_pos
         return self._play_order[prev_pos]
+
+    def _default_save_path(self) -> Path:
+        if self._last_playlist_path:
+            return self._last_playlist_path
+        if self.playlist and self.playlist.current():
+            return self.playlist.current().path.parent / "playlist.m3u8"
+        return Path.cwd() / "playlist.m3u8"
+
+    async def _save_playlist_flow(self) -> None:
+        default_path = self._default_save_path()
+        result = await self.push_screen_wait(
+            PlaylistPrompt("Save Playlist", str(default_path))
+        )
+        if not result:
+            return
+        dest = Path(result).expanduser()
+        try:
+            from rhythm_slicer.playlist_io import save_m3u8
+
+            save_m3u8(self.playlist, dest)
+        except Exception as exc:
+            self._set_message(f"Save failed: {exc}")
+            return
+        self._last_playlist_path = dest
+        self._set_message(f"Saved playlist: {dest}")
+
+    async def _load_playlist_flow(self) -> None:
+        default = str(self._last_playlist_path) if self._last_playlist_path else ""
+        result = await self.push_screen_wait(PlaylistPrompt("Load Playlist", default))
+        if not result:
+            return
+        path = Path(result).expanduser()
+        try:
+            new_playlist = load_from_input(path)
+        except Exception as exc:
+            self._set_message(f"Load failed: {exc}")
+            return
+        if new_playlist.is_empty():
+            self._set_message("Playlist is empty")
+            return
+        preserve = self.playlist.current().path if self.playlist else None
+        await self.set_playlist(new_playlist, preserve_path=preserve)
+        self._last_playlist_path = path
+        if not self._play_current_track():
+            self._skip_failed_track()
+        else:
+            self._set_message(f"Loaded playlist: {path}")
+
+
+class PlaylistPrompt(ModalScreen[Optional[str]]):
+    """Modal prompt for playlist paths."""
+
+    def __init__(self, title: str, default_path: str) -> None:
+        super().__init__()
+        self._title = title
+        self._default_path = default_path
+
+    def compose(self) -> ComposeResult:
+        with Container(id="playlist_prompt"):
+            yield Static(self._title, id="prompt_title")
+            yield Input(value=self._default_path, id="prompt_input")
+            with Horizontal(id="prompt_buttons"):
+                yield Button("OK", id="prompt_ok")
+                yield Button("Cancel", id="prompt_cancel")
+
+    def on_mount(self) -> None:
+        self.query_one("#prompt_input", Input).focus()
+
+    def on_button_pressed(self, event: Button.Pressed) -> None:
+        if event.button.id == "prompt_ok":
+            value = self.query_one("#prompt_input", Input).value.strip()
+            self.dismiss(value or None)
+        else:
+            self.dismiss(None)
+
+    def on_key(self, event: events.Key) -> None:
+        if event.key == "escape":
+            self.dismiss(None)
+        if event.key == "enter":
+            value = self.query_one("#prompt_input", Input).value.strip()
+            self.dismiss(value or None)
 
 
 def _truncate_line(text: str, max_width: int) -> str:

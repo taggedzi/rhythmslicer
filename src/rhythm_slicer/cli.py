@@ -7,8 +7,11 @@ import sys
 import time
 from dataclasses import dataclass
 from typing import Callable, Iterable, Optional
+from pathlib import Path
 
 from rhythm_slicer.player_vlc import VlcPlayer
+from rhythm_slicer.playlist import load_from_input
+from rhythm_slicer.playlist_io import save_m3u8
 
 
 @dataclass(frozen=True)
@@ -66,6 +69,16 @@ def build_parser() -> argparse.ArgumentParser:
     volume_parser.add_argument("level", type=_volume_type, help="0-100")
 
     subparsers.add_parser("status", help="Show current status")
+
+    playlist_parser = subparsers.add_parser("playlist", help="Playlist utilities")
+    playlist_sub = playlist_parser.add_subparsers(dest="playlist_cmd", required=True)
+
+    save_parser = playlist_sub.add_parser("save", help="Save playlist to M3U8")
+    save_parser.add_argument("dest", help="Destination .m3u8 path")
+    save_parser.add_argument("--from", dest="from_input", required=True)
+
+    show_parser = playlist_sub.add_parser("show", help="Show resolved tracks")
+    show_parser.add_argument("--from", dest="from_input", required=True)
 
     return parser
 
@@ -127,6 +140,20 @@ def _execute_command(player: VlcPlayer, args: argparse.Namespace) -> CommandResu
         state = player.get_state()
         media = player.current_media or "none"
         return CommandResult(0, f"State: {state}, Media: {media}")
+    if args.command == "playlist":
+        playlist = load_from_input(Path(args.from_input))
+        if args.playlist_cmd == "save":
+            if playlist.is_empty():
+                return CommandResult(1, "No tracks to save")
+            save_m3u8(playlist, Path(args.dest))
+            return CommandResult(0, f"Saved {len(playlist.tracks)} tracks to {args.dest}")
+        if args.playlist_cmd == "show":
+            lines = [
+                f"{idx + 1}\t{track.path}"
+                for idx, track in enumerate(playlist.tracks)
+            ]
+            return CommandResult(0, "\n".join(lines))
+        return CommandResult(2, f"Unknown playlist command: {args.playlist_cmd}")
     return CommandResult(2, f"Unknown command: {args.command}")
 
 
