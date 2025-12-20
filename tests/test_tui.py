@@ -177,6 +177,16 @@ def test_build_play_order_shuffle_keeps_current() -> None:
     assert order[pos] == 3
 
 
+def test_playlist_line_text_no_markup_artifact() -> None:
+    app = tui.RhythmSlicerApp(player=DummyPlayer(), path="song.mp3")
+    title = "Track [Live] Mix"
+    for width in (8, 12, 18, 24, 40):
+        line = app._render_playlist_line_text(
+            width, index=0, title=title, is_active=False
+        )
+        assert "[/]" not in line.plain
+
+
 def test_next_index_respects_wrap_and_shuffle() -> None:
     app = tui.RhythmSlicerApp(player=DummyPlayer(), path="song.mp3")
     app.playlist = Playlist(

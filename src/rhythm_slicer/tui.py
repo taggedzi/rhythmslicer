@@ -356,6 +356,8 @@ class RhythmSlicerApp(App):
         self._last_visualizer_text: Optional[str] = None
         self._viz_prefs: dict[str, object] = {}
         self._viz_restart_timer: Optional[object] = None
+        self._visualizer_ready = False
+        self._visualizer_init_attempts = 0
 
     def compose(self) -> ComposeResult:
         with Vertical():
@@ -416,6 +418,23 @@ class RhythmSlicerApp(App):
             self.set_focus(self._playlist_list)
         self._update_transport_row()
         self.set_interval(0.1, self._on_tick)
+        self.call_later(self._finalize_visualizer_layout)
+
+    def _finalize_visualizer_layout(self) -> None:
+        if self._visualizer_ready:
+            return
+        self._update_visualizer_viewport()
+        if self._viewport_width <= 2 or self._viewport_height <= 1:
+            self._visualizer_init_attempts += 1
+            if self._visualizer_init_attempts < 10:
+                self.set_timer(0.05, self._finalize_visualizer_layout)
+            return
+        self._update_visualizer_hud()
+        if self._current_track_path:
+            self._restart_hackscript_from_player()
+        elif self._visualizer and not self._frame_player.is_running:
+            self._visualizer.update(self._render_visualizer())
+        self._visualizer_ready = True
 
     def _set_message(
         self,
@@ -971,6 +990,35 @@ class RhythmSlicerApp(App):
     async def action_open(self) -> None:
         self.run_worker(self._open_flow(), exclusive=True)
 
+    def _render_playlist_line_text(
+        self,
+        width: int,
+        *,
+        index: int,
+        title: str,
+        is_active: bool,
+    ) -> Text:
+        prefix = f"{'>>' if is_active else '  '} {index + 1:>3}  "
+        title_space = max(1, width - len(prefix))
+        if len(title) > title_space:
+            title = title[: max(1, title_space - 1)] + "…"
+        else:
+            title = title.ljust(title_space)
+        if is_active:
+            line = Text(prefix + title, style="bold #5fc9d6 on #0c2024")
+        else:
+            line = Text()
+            line.append(prefix[:3])
+            line.append(prefix[3:6], style="#5b6170")
+            line.append(prefix[6:])
+            line.append(title, style="#8a93a3")
+        if line.cell_len > width:
+            line.truncate(width, overflow="ellipsis")
+        if line.cell_len < width:
+            pad_style = "bold #5fc9d6 on #0c2024" if is_active else "#8a93a3"
+            line.append(" " * (width - line.cell_len), style=pad_style)
+        return line
+
     def _update_playlist_view(self) -> None:
         if not self._playlist_list or not self.playlist:
             return
@@ -981,21 +1029,15 @@ class RhythmSlicerApp(App):
             self._playlist_list.update(message)
             self._update_playlist_footer()
             return
-        lines = []
+        lines: list[Text] = []
         for idx, track in enumerate(self.playlist.tracks):
             is_active = idx == self.playlist.index
-            marker = ">>" if is_active else "  "
-            prefix = f"{marker} {idx + 1:>3}  "
-            title_space = max(1, width - len(prefix))
-            title = track.title
-            if len(title) > title_space:
-                title = title[: max(1, title_space - 1)] + "…"
-            else:
-                title = title.ljust(title_space)
-            if is_active:
-                line = f"[bold #5fc9d6 on #0c2024]{prefix}{title}[/]"
-            else:
-                line = f"{marker} [#5b6170]{idx + 1:>3}[/]  [#8a93a3]{title}[/]"
+            line = self._render_playlist_line_text(
+                width,
+                index=idx,
+                title=track.title,
+                is_active=is_active,
+            )
             lines.append(line)
         max_offset = max(0, len(lines) - view_height)
         self._scroll_offset = min(self._scroll_offset, max_offset)
@@ -1007,8 +1049,13 @@ class RhythmSlicerApp(App):
         end = start + view_height
         visible = lines[start:end]
         if len(visible) < view_height:
-            visible.extend([""] * (view_height - len(visible)))
-        self._playlist_list.update("\n".join(visible))
+            visible.extend([Text("")] * (view_height - len(visible)))
+        output = Text()
+        for idx, line in enumerate(visible):
+            if idx:
+                output.append("\n")
+            output.append_text(line)
+        self._playlist_list.update(output)
         self._update_playlist_footer()
 
     def _render_playlist_footer(self) -> str:
