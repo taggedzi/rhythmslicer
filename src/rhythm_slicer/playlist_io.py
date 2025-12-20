@@ -6,6 +6,7 @@ from pathlib import Path
 
 from typing import Literal
 
+from rhythm_slicer.metadata import format_display_title, get_track_meta
 from rhythm_slicer.playlist import Playlist, Track, SUPPORTED_EXTENSIONS
 
 
@@ -54,5 +55,7 @@ def load_m3u_any(path: Path) -> Playlist:
             continue
         if not _is_supported(item):
             continue
-        tracks.append(Track(path=item, title=item.name))
+        meta = get_track_meta(item)
+        title = format_display_title(item, meta)
+        tracks.append(Track(path=item, title=title))
     return Playlist(tracks)

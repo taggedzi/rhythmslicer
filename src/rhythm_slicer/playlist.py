@@ -6,6 +6,8 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Iterable, Optional
 
+from rhythm_slicer.metadata import format_display_title, get_track_meta
+
 SUPPORTED_EXTENSIONS = {".mp3", ".flac", ".wav", ".ogg", ".m4a", ".aac"}
 M3U_EXTENSIONS = {".m3u", ".m3u8"}
 
@@ -88,7 +90,9 @@ def _is_supported(path: Path) -> bool:
 
 
 def _track_from_path(path: Path) -> Track:
-    return Track(path=path, title=path.name)
+    meta = get_track_meta(path)
+    title = format_display_title(path, meta)
+    return Track(path=path, title=title)
 
 
 def load_from_directory(directory: Path) -> Playlist:

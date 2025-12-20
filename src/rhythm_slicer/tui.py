@@ -22,6 +22,7 @@ except Exception as exc:  # pragma: no cover - depends on environment
     ) from exc
 
 from rhythm_slicer.config import AppConfig, load_config, save_config
+from rhythm_slicer.metadata import format_display_title, get_track_meta
 from rhythm_slicer.player_vlc import VlcPlayer
 from rhythm_slicer.playlist import Playlist, Track, load_from_input, SUPPORTED_EXTENSIONS
 
@@ -1142,7 +1143,11 @@ def _load_recursive_directory(path: Path) -> Playlist:
         if entry.is_file() and entry.suffix.lower() in SUPPORTED_EXTENSIONS
     ]
     files.sort(key=lambda entry: entry.relative_to(path).as_posix().lower())
-    tracks = [Track(path=entry, title=entry.name) for entry in files]
+    tracks = []
+    for entry in files:
+        meta = get_track_meta(entry)
+        title = format_display_title(entry, meta)
+        tracks.append(Track(path=entry, title=title))
     return Playlist(tracks)
 
 
