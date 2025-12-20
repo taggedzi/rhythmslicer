@@ -207,6 +207,20 @@ def _allocate_phases(
     return allocation
 
 
+def locate_phase(
+    global_frame: int, phases: list[tuple[str, int]]
+) -> tuple[str, int]:
+    remaining = max(0, int(global_frame))
+    for name, count in phases:
+        if remaining < count:
+            return name, remaining
+        remaining -= count
+    if phases:
+        name, count = phases[-1]
+        return name, max(0, count - 1)
+    return "IDLE", remaining
+
+
 def _lcg(seed: int) -> Iterator[int]:
     """Simple deterministic PRNG (no external deps)."""
     x = seed & 0xFFFFFFFF
@@ -258,14 +272,20 @@ def _file_facts(track_path: str, prefs: dict) -> dict[str, str | None]:
     return facts
 
 
-def _boot_scene(
+def _frame_seed(base_seed: int, phase_name: str, local_i: int) -> int:
+    digest = sha256(f"{base_seed}:{phase_name}:{local_i}".encode("utf-8")).hexdigest()
+    return int(digest[:8], 16)
+
+
+def render_boot(
     stage_id: str,
     width: int,
     height: int,
+    local_i: int,
+    phase_len: int,
     *,
-    frames: int,
     use_ansi: bool = False,
-) -> Iterator[str]:
+) -> str:
     header = _color("[HackScope]", _ANSI_CYAN, use_ansi)
     boot_lines = [
         f">> booting hackscript [{stage_id}]",
@@ -273,33 +293,37 @@ def _boot_scene(
         ">> indexing metadata",
         ">> preparing hackscope scenes",
     ]
-    total = max(1, frames)
-    for i in range(total):
-        line = boot_lines[i % len(boot_lines)]
-        pct = int((i / max(1, total - 1)) * 100)
-        bar = _color(_bar(pct, max(10, min(30, width - 20)), fill="#", empty="-"), _ANSI_GREEN, use_ansi)
-        lines = [
-            f"{header} BOOT [{stage_id}]",
-            "",
-            line,
-            "",
-            f"{_color('progress', _ANSI_DIM, use_ansi)}: {pct:3d}% [{bar}]",
-        ]
-        yield _pad_to_viewport(lines, width, height)
+    total = max(1, phase_len)
+    line = boot_lines[local_i % len(boot_lines)]
+    pct = int((local_i / max(1, total - 1)) * 100)
+    bar = _color(
+        _bar(pct, max(10, min(30, width - 20)), fill="#", empty="-"),
+        _ANSI_GREEN,
+        use_ansi,
+    )
+    lines = [
+        f"{header} BOOT [{stage_id}]",
+        "",
+        line,
+        "",
+        f"{_color('progress', _ANSI_DIM, use_ansi)}: {pct:3d}% [{bar}]",
+    ]
+    return _pad_to_viewport(lines, width, height)
 
 
-def _ice_scene(
+def render_ice(
     stage_id: str,
     title: str,
     width: int,
     height: int,
     seed: int,
+    local_i: int,
+    phase_len: int,
     *,
-    frames: int = 30,
     use_ansi: bool = False,
-) -> Iterator[str]:
+) -> str:
     """Flavor-only: 'ICE' breach display."""
-    prng = _lcg(seed ^ 0x1CEB00DA)
+    prng = _lcg(_frame_seed(seed, "ICE", local_i))
     left_w = max(1, min(width, (width * 2) // 3))
     right_w = max(0, width - left_w - (1 if width >= 3 else 0))
     bar_w = max(8, right_w - 6) if right_w > 0 else max(12, width - 18)
@@ -316,56 +340,58 @@ def _ice_scene(
         ">> status: ok",
     ]
 
-    for i in range(frames):
-        pct = int((i / max(1, frames - 1)) * 100)
-        shown = 2 + (i * len(base_log) // max(1, frames - 1))
-        log_lines = base_log[: min(len(base_log), shown)]
+    total = max(1, phase_len)
+    pct = int((local_i / max(1, total - 1)) * 100)
+    shown = 2 + (local_i * len(base_log) // max(1, total - 1))
+    log_lines = base_log[: min(len(base_log), shown)]
 
-        if (next(prng) % 5) == 0:
-            noise = next(prng) & 0xFFFF
-            log_lines.append(f">> jitter: {noise:04x}")
+    if (next(prng) % 5) == 0:
+        noise = next(prng) & 0xFFFF
+        log_lines.append(f">> jitter: {noise:04x}")
 
-        header = _color("[HackScope]", _ANSI_CYAN, use_ansi)
-        left = [f"{header} BREACHING ICE"] + [""] + log_lines
-        right: list[str] = []
-        if right_w > 0:
-            right.append(_color("ICE", _ANSI_CYAN, use_ansi))
-            bar = _bar(pct, bar_w, fill="#", empty="-")
-            bar = _color(bar, _ANSI_GREEN, use_ansi)
-            right.append(f"{pct:3d}% [{bar}]")
-            right.append("")
-            lattice_h = max(6, min(10, height - 6))
-            lattice_w = max(10, min(right_w, 18))
-            sweep = i % max(1, lattice_w - 2)
-            for y in range(lattice_h):
-                row = []
-                for x in range(lattice_w):
-                    if x in (0, lattice_w - 1) or y in (0, lattice_h - 1):
-                        row.append("+")
-                    elif x == 1 + sweep:
-                        row.append("*")
-                    else:
-                        row.append(".")
-                right.append("".join(row))
-        frame = _render_two_col(left, right, width, height)
-        yield frame
+    header = _color("[HackScope]", _ANSI_CYAN, use_ansi)
+    left = [f"{header} BREACHING ICE"] + [""] + log_lines
+    right: list[str] = []
+    if right_w > 0:
+        right.append(_color("ICE", _ANSI_CYAN, use_ansi))
+        bar = _bar(pct, bar_w, fill="#", empty="-")
+        bar = _color(bar, _ANSI_GREEN, use_ansi)
+        right.append(f"{pct:3d}% [{bar}]")
+        right.append("")
+        lattice_h = max(6, min(10, height - 6))
+        lattice_w = max(10, min(right_w, 18))
+        sweep = local_i % max(1, lattice_w - 2)
+        for y in range(lattice_h):
+            row = []
+            for x in range(lattice_w):
+                if x in (0, lattice_w - 1) or y in (0, lattice_h - 1):
+                    row.append("+")
+                elif x == 1 + sweep:
+                    row.append("*")
+                else:
+                    row.append(".")
+            right.append("".join(row))
+    return _render_two_col(left, right, width, height)
 
 
-def _map_scene(
+def render_map(
     stage_id: str,
     meta: dict,
     width: int,
     height: int,
     seed: int,
+    local_i: int,
+    phase_len: int,
     *,
-    frames: int,
     use_ansi: bool = False,
-) -> Iterator[str]:
-    prng = _lcg(seed ^ 0xC0FFEE11)
+) -> str:
+    prng = _lcg(_frame_seed(seed, "MAP", local_i))
     left_w = max(1, min(width, (width * 2) // 3))
     right_w = max(0, width - left_w - (1 if width >= 3 else 0))
     lattice_h = max(6, min(10, height - 6))
-    lattice_w = max(10, min(right_w, 18)) if right_w > 0 else max(10, min(width, 18))
+    lattice_w = (
+        max(10, min(right_w, 18)) if right_w > 0 else max(10, min(width, 18))
+    )
     nodes = []
     for _ in range(8):
         x = 1 + (next(prng) % max(1, lattice_w - 2))
@@ -394,47 +420,51 @@ def _map_scene(
         f">> channels: {channels_text}",
     ]
     header = _color("[HackScope]", _ANSI_CYAN, use_ansi)
-    total = max(1, frames)
-    for i in range(total):
-        pct = int((i / max(1, total - 1)) * 100)
-        shown = 2 + (i * len(base_log) // max(1, total - 1))
-        log_lines = base_log[: min(len(base_log), shown)]
-        left = [f"{header} MAP / TOPOLOGY [{stage_id}]"] + [""] + log_lines
-        right: list[str] = []
-        if right_w > 0:
-            right.append(_color("MAP", _ANSI_CYAN, use_ansi))
-            bar = _color(_bar(pct, max(8, right_w - 6), fill="#", empty="-"), _ANSI_GREEN, use_ansi)
-            right.append(f"{pct:3d}% [{bar}]")
-            right.append("")
-            sweep = i % max(1, lattice_w - 2)
-            lit = max(1, int((i / max(1, total - 1)) * len(nodes)))
-            for y in range(lattice_h):
-                row = []
-                for x in range(lattice_w):
-                    if x in (0, lattice_w - 1) or y in (0, lattice_h - 1):
-                        row.append("+")
-                    elif x == 1 + sweep:
-                        row.append("*")
-                    elif (x, y) in nodes[:lit]:
-                        node = "o"
-                        row.append(_color(node, _ANSI_MAGENTA, use_ansi))
-                    else:
-                        row.append(".")
-                right.append("".join(row))
-        yield _render_two_col(left, right, width, height)
+    total = max(1, phase_len)
+    pct = int((local_i / max(1, total - 1)) * 100)
+    shown = 2 + (local_i * len(base_log) // max(1, total - 1))
+    log_lines = base_log[: min(len(base_log), shown)]
+    left = [f"{header} MAP / TOPOLOGY [{stage_id}]"] + [""] + log_lines
+    right: list[str] = []
+    if right_w > 0:
+        right.append(_color("MAP", _ANSI_CYAN, use_ansi))
+        bar = _color(
+            _bar(pct, max(8, right_w - 6), fill="#", empty="-"),
+            _ANSI_GREEN,
+            use_ansi,
+        )
+        right.append(f"{pct:3d}% [{bar}]")
+        right.append("")
+        sweep = local_i % max(1, lattice_w - 2)
+        lit = max(1, int((local_i / max(1, total - 1)) * len(nodes)))
+        for y in range(lattice_h):
+            row = []
+            for x in range(lattice_w):
+                if x in (0, lattice_w - 1) or y in (0, lattice_h - 1):
+                    row.append("+")
+                elif x == 1 + sweep:
+                    row.append("*")
+                elif (x, y) in nodes[:lit]:
+                    node = "o"
+                    row.append(_color(node, _ANSI_MAGENTA, use_ansi))
+                else:
+                    row.append(".")
+            right.append("".join(row))
+    return _render_two_col(left, right, width, height)
 
 
-def _defrag_scene(
+def render_defrag(
     stage_id: str,
     width: int,
     height: int,
     seed: int,
+    local_i: int,
+    phase_len: int,
     *,
-    frames: int = 36,
     use_ansi: bool = False,
-) -> Iterator[str]:
+) -> str:
     """Flavor-only: old-school 'defrag' block consolidation."""
-    prng = _lcg(seed ^ 0xD3F4A600)
+    prng = _lcg(_frame_seed(seed, "DEFRAG", local_i))
     header = f"{_color('[HackScope]', _ANSI_CYAN, use_ansi)} DEFRAG CACHE [{stage_id}]"
 
     grid_w = max(18, min(48, width - 2))
@@ -450,9 +480,9 @@ def _defrag_scene(
         else:
             cells.append("█")
 
-    def render_grid(step: int) -> list[str]:
+    def render_grid(step: int, total: int) -> list[str]:
         out: list[str] = []
-        sweep = step / max(1, frames - 1)
+        sweep = step / max(1, total - 1)
         for y in range(grid_h):
             row = cells[y * grid_w : (y + 1) * grid_w]
 
@@ -467,35 +497,36 @@ def _defrag_scene(
             out.append("".join(row2))
         return out
 
-    for i in range(frames):
-        pct = int((i / max(1, frames - 1)) * 100)
-        lines: list[str] = [header, ""]
-        bar = _bar(pct, max(10, min(40, width - 18)), fill="█", empty=" ")
-        bar = _color(bar, _ANSI_GREEN, use_ansi)
-        lines.append(f"{_color('progress', _ANSI_DIM, use_ansi)}: {pct:3d}%  [{bar}]")
-        lines.append("")
-        grid = render_grid(i)
-        pad_left = max(0, (width - grid_w) // 2)
-        for row in grid:
-            lines.append((" " * pad_left) + row)
-        lines.append("")
-        note = _color("note", _ANSI_DIM, use_ansi)
-        lines.append(f"{note}: animation only (no real disk activity)")
-        yield _pad_to_viewport(lines, width, height)
+    total = max(1, phase_len)
+    pct = int((local_i / max(1, total - 1)) * 100)
+    lines: list[str] = [header, ""]
+    bar = _bar(pct, max(10, min(40, width - 18)), fill="█", empty=" ")
+    bar = _color(bar, _ANSI_GREEN, use_ansi)
+    lines.append(f"{_color('progress', _ANSI_DIM, use_ansi)}: {pct:3d}%  [{bar}]")
+    lines.append("")
+    grid = render_grid(local_i, total)
+    pad_left = max(0, (width - grid_w) // 2)
+    for row in grid:
+        lines.append((" " * pad_left) + row)
+    lines.append("")
+    note = _color("note", _ANSI_DIM, use_ansi)
+    lines.append(f"{note}: animation only (no real disk activity)")
+    return _pad_to_viewport(lines, width, height)
 
 
-def _decrypt_scene(
+def render_decrypt(
     stage_id: str,
     meta: dict,
     width: int,
     height: int,
     seed: int,
+    local_i: int,
+    phase_len: int,
     *,
-    frames: int = 34,
     use_ansi: bool = False,
-) -> Iterator[str]:
+) -> str:
     """Flavor-only: 'decrypt/extract' display using only real metadata."""
-    prng = _lcg(seed ^ 0xDEC0DE99)
+    prng = _lcg(_frame_seed(seed, "DECRYPT", local_i))
     title = _meta_value(meta, "title") or "Unknown"
     container = _meta_value(meta, "container") or "Unknown"
     codec = _meta_value(meta, "codec") or "Unknown"
@@ -520,43 +551,44 @@ def _decrypt_scene(
         ">> cleanup: traces (simulated)",
     ]
 
-    for i in range(frames):
-        pct = int((i / max(1, frames - 1)) * 100)
-        shown = 1 + (i * len(base) // max(1, frames - 1))
-        log = base[:shown]
+    total = max(1, phase_len)
+    pct = int((local_i / max(1, total - 1)) * 100)
+    shown = 1 + (local_i * len(base) // max(1, total - 1))
+    log = base[:shown]
 
-        if (next(prng) % 6) == 0:
-            blk = next(prng) & 0xFFFF
-            log.append(f">> block: {blk:04x}")
+    if (next(prng) % 6) == 0:
+        blk = next(prng) & 0xFFFF
+        log.append(f">> block: {blk:04x}")
 
-        header = f"{_color('[HackScope]', _ANSI_CYAN, use_ansi)} DECRYPT / EXTRACT [{stage_id}]"
-        progress_bar = _bar(pct, max(10, min(40, width - 18)), fill="█", empty="░")
-        progress_bar = _color(progress_bar, _ANSI_GREEN, use_ansi)
-        lines: list[str] = [
-            header,
-            f"{_color('track', _ANSI_DIM, use_ansi)}: {title}",
-            "",
-            f"{_color('progress', _ANSI_DIM, use_ansi)}: {pct:3d}%  [{progress_bar}]",
-            "",
-            *log,
-        ]
-        lines.append("")
-        note = _color("note", _ANSI_DIM, use_ansi)
-        lines.append(f"{note}: animation only (metadata-driven)")
-        yield _pad_to_viewport(lines, width, height)
+    header = f"{_color('[HackScope]', _ANSI_CYAN, use_ansi)} DECRYPT / EXTRACT [{stage_id}]"
+    progress_bar = _bar(pct, max(10, min(40, width - 18)), fill="█", empty="░")
+    progress_bar = _color(progress_bar, _ANSI_GREEN, use_ansi)
+    lines: list[str] = [
+        header,
+        f"{_color('track', _ANSI_DIM, use_ansi)}: {title}",
+        "",
+        f"{_color('progress', _ANSI_DIM, use_ansi)}: {pct:3d}%  [{progress_bar}]",
+        "",
+        *log,
+    ]
+    lines.append("")
+    note = _color("note", _ANSI_DIM, use_ansi)
+    lines.append(f"{note}: animation only (metadata-driven)")
+    return _pad_to_viewport(lines, width, height)
 
 
-def _extract_scene(
+def render_extract(
     stage_id: str,
     meta: dict,
     width: int,
     height: int,
     seed: int,
+    local_i: int,
+    phase_len: int,
     *,
-    frames: int,
     use_ansi: bool = False,
-) -> Iterator[str]:
-    prng = _lcg(seed ^ 0xE0A7C7ED)
+) -> str:
+    prng = _lcg(_frame_seed(seed, "EXTRACT", local_i))
     title = _meta_value(meta, "title") or "Unknown"
     artist = _meta_value(meta, "artist") or "Unknown"
     album = _meta_value(meta, "album") or "Unknown"
@@ -568,41 +600,45 @@ def _extract_scene(
         ">> checksum: ok (simulated)",
     ]
     header = f"{_color('[HackScope]', _ANSI_CYAN, use_ansi)} EXTRACT / VERIFY [{stage_id}]"
-    total = max(1, frames)
-    for i in range(total):
-        pct = int((i / max(1, total - 1)) * 100)
-        shown = 1 + (i * len(base) // max(1, total - 1))
-        log = base[:shown]
-        bar = _color(_bar(pct, max(10, min(40, width - 18)), fill="█", empty="░"), _ANSI_GREEN, use_ansi)
-        lines = [
-            header,
-            f"{_color('track', _ANSI_DIM, use_ansi)}: {title}",
-            "",
-            f"{_color('progress', _ANSI_DIM, use_ansi)}: {pct:3d}%  [{bar}]",
-            "",
-            *log,
-        ]
-        if (next(prng) % 7) == 0:
-            lines.append(">> verify: pass")
-        lines.append("")
-        note = _color("note", _ANSI_DIM, use_ansi)
-        lines.append(f"{note}: animation only (metadata-driven)")
-        yield _pad_to_viewport(lines, width, height)
+    total = max(1, phase_len)
+    pct = int((local_i / max(1, total - 1)) * 100)
+    shown = 1 + (local_i * len(base) // max(1, total - 1))
+    log = base[:shown]
+    bar = _color(
+        _bar(pct, max(10, min(40, width - 18)), fill="█", empty="░"),
+        _ANSI_GREEN,
+        use_ansi,
+    )
+    lines = [
+        header,
+        f"{_color('track', _ANSI_DIM, use_ansi)}: {title}",
+        "",
+        f"{_color('progress', _ANSI_DIM, use_ansi)}: {pct:3d}%  [{bar}]",
+        "",
+        *log,
+    ]
+    if (next(prng) % 7) == 0:
+        lines.append(">> verify: pass")
+    lines.append("")
+    note = _color("note", _ANSI_DIM, use_ansi)
+    lines.append(f"{note}: animation only (metadata-driven)")
+    return _pad_to_viewport(lines, width, height)
 
 
-def _scan_scene(
+def render_scan(
     stage_id: str,
     facts: dict[str, str | None],
     width: int,
     height: int,
     seed: int,
+    local_i: int,
+    phase_len: int,
     *,
-    frames: int,
     use_ansi: bool = False,
-) -> Iterator[str]:
-    prng = _lcg(seed ^ 0x5CA7F00D)
+) -> str:
+    prng = _lcg(_frame_seed(seed, "SCAN", local_i))
     header = f"{_color('[HackScope]', _ANSI_CYAN, use_ansi)} SCAN / FILE FACTS [{stage_id}]"
-    total = max(1, frames)
+    total = max(1, phase_len)
     size = facts.get("size") or "Unknown"
     path = facts.get("path") or "Unknown"
     hash_label = facts.get("hash_label")
@@ -614,96 +650,100 @@ def _scan_scene(
     if hash_label:
         base.append(f">> {hash_label}: {hash_value or 'Unavailable'}")
     base.append(">> scan: ok (simulated)")
-    for i in range(total):
-        pct = int((i / max(1, total - 1)) * 100)
-        shown = 1 + (i * len(base) // max(1, total - 1))
-        log = base[:shown]
-        if (next(prng) % 6) == 0:
-            log.append(">> fsync: ok (simulated)")
-        bar = _color(_bar(pct, max(10, min(40, width - 18)), fill="█", empty="░"), _ANSI_GREEN, use_ansi)
-        lines = [
-            header,
-            "",
-            f"{_color('progress', _ANSI_DIM, use_ansi)}: {pct:3d}%  [{bar}]",
-            "",
-            *log,
-        ]
-        lines.append("")
-        note = _color("note", _ANSI_DIM, use_ansi)
-        lines.append(f"{note}: animation only (file facts)")
-        yield _pad_to_viewport(lines, width, height)
+    pct = int((local_i / max(1, total - 1)) * 100)
+    shown = 1 + (local_i * len(base) // max(1, total - 1))
+    log = base[:shown]
+    if (next(prng) % 6) == 0:
+        log.append(">> fsync: ok (simulated)")
+    bar = _color(
+        _bar(pct, max(10, min(40, width - 18)), fill="█", empty="░"),
+        _ANSI_GREEN,
+        use_ansi,
+    )
+    lines = [
+        header,
+        "",
+        f"{_color('progress', _ANSI_DIM, use_ansi)}: {pct:3d}%  [{bar}]",
+        "",
+        *log,
+    ]
+    lines.append("")
+    note = _color("note", _ANSI_DIM, use_ansi)
+    lines.append(f"{note}: animation only (file facts)")
+    return _pad_to_viewport(lines, width, height)
 
 
-def _cover_scene(
+def render_cover(
     stage_id: str,
     meta: dict,
     width: int,
     height: int,
     seed: int,
+    local_i: int,
+    phase_len: int,
     *,
-    frames: int,
     use_ansi: bool = False,
-) -> Iterator[str]:
-    prng = _lcg(seed ^ 0xC0A7EED0)
+) -> str:
+    prng = _lcg(_frame_seed(seed, "COVER", local_i))
     title = _meta_value(meta, "title") or "Unknown"
     artist = _meta_value(meta, "artist") or "Unknown"
     codec = _meta_value(meta, "codec") or "Unknown"
     container = _meta_value(meta, "container") or "Unknown"
     header = f"{_color('[HackScope]', _ANSI_CYAN, use_ansi)} COVER TRACKS [{stage_id}]"
-    total = max(1, frames)
-    for i in range(total):
-        pct = int((i / max(1, total - 1)) * 100)
-        scrub = _bar(pct, max(10, min(40, width - 18)), fill="=", empty="-")
-        scrub = _color(scrub, _ANSI_MAGENTA, use_ansi)
-        lines = [
-            header,
-            "",
-            f"{_color('redacting', _ANSI_DIM, use_ansi)}: {pct:3d}% [{scrub}]",
-            "",
-            f">> summary: {title}",
-            f">> artist: {artist}",
-            f">> codec: {codec}",
-            f">> container: {container}",
-        ]
-        if (next(prng) % 5) == 0:
-            lines.append(">> logs: scrubbed (simulated)")
-        lines.append("")
-        note = _color("note", _ANSI_DIM, use_ansi)
-        lines.append(f"{note}: animation only (metadata summary)")
-        yield _pad_to_viewport(lines, width, height)
+    total = max(1, phase_len)
+    pct = int((local_i / max(1, total - 1)) * 100)
+    scrub = _bar(pct, max(10, min(40, width - 18)), fill="=", empty="-")
+    scrub = _color(scrub, _ANSI_MAGENTA, use_ansi)
+    lines = [
+        header,
+        "",
+        f"{_color('redacting', _ANSI_DIM, use_ansi)}: {pct:3d}% [{scrub}]",
+        "",
+        f">> summary: {title}",
+        f">> artist: {artist}",
+        f">> codec: {codec}",
+        f">> container: {container}",
+    ]
+    if (next(prng) % 5) == 0:
+        lines.append(">> logs: scrubbed (simulated)")
+    lines.append("")
+    note = _color("note", _ANSI_DIM, use_ansi)
+    lines.append(f"{note}: animation only (metadata summary)")
+    return _pad_to_viewport(lines, width, height)
 
 
-def _dossier_scene(
+def render_dossier(
     track_path: str,
     meta: dict,
     viewport: tuple[int, int],
     prefs: dict,
+    local_i: int,
+    phase_len: int,
     *,
-    frames: int,
     use_ansi: bool = False,
-) -> Iterator[str]:
-    frame = _render_dossier(
+) -> str:
+    del local_i, phase_len
+    return _render_dossier(
         track_path,
         meta,
         viewport,
         prefs,
         use_ansi=use_ansi,
     )
-    for _ in range(max(1, frames)):
-        yield frame
 
 
-def _idle_scene(
+def render_idle(
     stage_id: str,
     track_path: str,
     meta: dict,
     width: int,
     height: int,
     seed: int,
+    local_i: int,
     *,
     use_ansi: bool = False,
-) -> Iterator[str]:
-    prng = _lcg(seed ^ 0x1D1E1D1E)
+) -> str:
+    prng = _lcg(_frame_seed(seed, "IDLE", local_i))
     title = _meta_value(meta, "title") or Path(track_path).name
     artist = _meta_value(meta, "artist") or "Unknown"
     spinner = "|/-\\"
@@ -712,26 +752,23 @@ def _idle_scene(
         "idle: maintaining session",
         "idle: await next phase",
     ]
-    idx = 0
-    while True:
-        spin = spinner[idx % len(spinner)]
-        status = status_lines[idx % len(status_lines)]
-        header = f"{_color('[HackScope]', _ANSI_CYAN, use_ansi)} IDLE [{stage_id}] {spin}"
-        lines = [
-            header,
-            "",
-            f"{_color('now playing', _ANSI_DIM, use_ansi)}: {title}",
-            f"{_color('artist', _ANSI_DIM, use_ansi)}: {artist}",
-            "",
-            f"{_color('status', _ANSI_DIM, use_ansi)}: {status}",
-        ]
-        if (next(prng) % 7) == 0:
-            lines.append(">> heartbeat: ok")
-        lines.append("")
-        note = _color("note", _ANSI_DIM, use_ansi)
-        lines.append(f"{note}: idle loop (visual only)")
-        yield _pad_to_viewport(lines, width, height)
-        idx += 1
+    spin = spinner[local_i % len(spinner)]
+    status = status_lines[local_i % len(status_lines)]
+    header = f"{_color('[HackScope]', _ANSI_CYAN, use_ansi)} IDLE [{stage_id}] {spin}"
+    lines = [
+        header,
+        "",
+        f"{_color('now playing', _ANSI_DIM, use_ansi)}: {title}",
+        f"{_color('artist', _ANSI_DIM, use_ansi)}: {artist}",
+        "",
+        f"{_color('status', _ANSI_DIM, use_ansi)}: {status}",
+    ]
+    if (next(prng) % 7) == 0:
+        lines.append(">> heartbeat: ok")
+    lines.append("")
+    note = _color("note", _ANSI_DIM, use_ansi)
+    lines.append(f"{note}: idle loop (visual only)")
+    return _pad_to_viewport(lines, width, height)
 
 
 def _render_dossier(
@@ -792,6 +829,8 @@ def generate_frames(ctx: VizContext) -> Iterator[str]:
         show_seconds = _clamp_int(int(duration_sec * coverage), min_show, max_show)
     fps = max(1.0, _safe_float(ctx.prefs.get("fps", 20.0), 20.0))
     total_frames = max(1, int(show_seconds * fps))
+    start_ms = int(ctx.prefs.get("playback_pos_ms", 0) or 0)
+    start_frame = max(0, int((start_ms / 1000.0) * fps))
 
     phases = [
         ("BOOT", 0.03),
@@ -812,92 +851,134 @@ def generate_frames(ctx: VizContext) -> Iterator[str]:
     if "decrypt_frames" in ctx.prefs:
         overrides["DECRYPT"] = _safe_int(ctx.prefs.get("decrypt_frames", 0), 0)
     phase_frames = _allocate_phases(total_frames, phases, overrides)
-
-    yield from _boot_scene(
-        stage_id,
-        width,
-        height,
-        frames=phase_frames["BOOT"],
-        use_ansi=use_ansi,
-    )
-    title = _meta_value(meta, "title") or Path(ctx.track_path).name
-    yield from _ice_scene(
-        stage_id,
-        title,
-        width,
-        height,
-        seed,
-        frames=phase_frames["ICE"],
-        use_ansi=use_ansi,
-    )
-    yield from _map_scene(
-        stage_id,
-        meta,
-        width,
-        height,
-        seed,
-        frames=phase_frames["MAP"],
-        use_ansi=use_ansi,
-    )
-    yield from _defrag_scene(
-        stage_id,
-        width,
-        height,
-        seed,
-        frames=phase_frames["DEFRAG"],
-        use_ansi=use_ansi,
-    )
+    phase_list = [(name, phase_frames[name]) for name, _weight in phases]
+    phase_len_map = {name: count for name, count in phase_list}
+    total_scripted = sum(count for _name, count in phase_list)
     facts = _file_facts(ctx.track_path, ctx.prefs)
-    yield from _scan_scene(
-        stage_id,
-        facts,
-        width,
-        height,
-        seed,
-        frames=phase_frames["SCAN"],
-        use_ansi=use_ansi,
-    )
-    yield from _decrypt_scene(
-        stage_id,
-        meta,
-        width,
-        height,
-        seed,
-        frames=phase_frames["DECRYPT"],
-        use_ansi=use_ansi,
-    )
-    yield from _extract_scene(
-        stage_id,
-        meta,
-        width,
-        height,
-        seed,
-        frames=phase_frames["EXTRACT"],
-        use_ansi=use_ansi,
-    )
-    yield from _cover_scene(
-        stage_id,
-        meta,
-        width,
-        height,
-        seed,
-        frames=phase_frames["COVER"],
-        use_ansi=use_ansi,
-    )
-    yield from _dossier_scene(
-        ctx.track_path,
-        meta,
-        (width, height),
-        ctx.prefs,
-        frames=phase_frames["DOSSIER"],
-        use_ansi=use_ansi,
-    )
-    yield from _idle_scene(
-        stage_id,
-        ctx.track_path,
-        meta,
-        width,
-        height,
-        seed,
-        use_ansi=use_ansi,
-    )
+    title = _meta_value(meta, "title") or Path(ctx.track_path).name
+
+    global_frame = start_frame
+    while True:
+        if global_frame < total_scripted:
+            phase_name, local_i = locate_phase(global_frame, phase_list)
+            phase_len = phase_len_map.get(phase_name, 1)
+            if phase_name == "BOOT":
+                frame = render_boot(
+                    stage_id,
+                    width,
+                    height,
+                    local_i,
+                    phase_len,
+                    use_ansi=use_ansi,
+                )
+            elif phase_name == "ICE":
+                frame = render_ice(
+                    stage_id,
+                    title,
+                    width,
+                    height,
+                    seed,
+                    local_i,
+                    phase_len,
+                    use_ansi=use_ansi,
+                )
+            elif phase_name == "MAP":
+                frame = render_map(
+                    stage_id,
+                    meta,
+                    width,
+                    height,
+                    seed,
+                    local_i,
+                    phase_len,
+                    use_ansi=use_ansi,
+                )
+            elif phase_name == "DEFRAG":
+                frame = render_defrag(
+                    stage_id,
+                    width,
+                    height,
+                    seed,
+                    local_i,
+                    phase_len,
+                    use_ansi=use_ansi,
+                )
+            elif phase_name == "SCAN":
+                frame = render_scan(
+                    stage_id,
+                    facts,
+                    width,
+                    height,
+                    seed,
+                    local_i,
+                    phase_len,
+                    use_ansi=use_ansi,
+                )
+            elif phase_name == "DECRYPT":
+                frame = render_decrypt(
+                    stage_id,
+                    meta,
+                    width,
+                    height,
+                    seed,
+                    local_i,
+                    phase_len,
+                    use_ansi=use_ansi,
+                )
+            elif phase_name == "EXTRACT":
+                frame = render_extract(
+                    stage_id,
+                    meta,
+                    width,
+                    height,
+                    seed,
+                    local_i,
+                    phase_len,
+                    use_ansi=use_ansi,
+                )
+            elif phase_name == "COVER":
+                frame = render_cover(
+                    stage_id,
+                    meta,
+                    width,
+                    height,
+                    seed,
+                    local_i,
+                    phase_len,
+                    use_ansi=use_ansi,
+                )
+            elif phase_name == "DOSSIER":
+                frame = render_dossier(
+                    ctx.track_path,
+                    meta,
+                    (width, height),
+                    ctx.prefs,
+                    local_i,
+                    phase_len,
+                    use_ansi=use_ansi,
+                )
+            else:
+                frame = render_idle(
+                    stage_id,
+                    ctx.track_path,
+                    meta,
+                    width,
+                    height,
+                    seed,
+                    local_i,
+                    use_ansi=use_ansi,
+                )
+        else:
+            idle_i = global_frame - total_scripted
+            frame = render_idle(
+                stage_id,
+                ctx.track_path,
+                meta,
+                width,
+                height,
+                seed,
+                idle_i,
+                use_ansi=use_ansi,
+            )
+        yield frame
+        global_frame += 1

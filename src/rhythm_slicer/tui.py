@@ -534,6 +534,15 @@ class RhythmSlicerApp(App):
                 return
         self._set_message("Seek unsupported")
 
+    def _get_playback_position_ms(self) -> int | None:
+        getter = getattr(self.player, "get_position_ms", None)
+        if not callable(getter):
+            return None
+        try:
+            return getter()
+        except Exception:
+            return None
+
     def _seek_to_ratio(self, ratio: float) -> None:
         length = self.player.get_length_ms()
         if not length or length <= 0:
@@ -895,7 +904,8 @@ class RhythmSlicerApp(App):
         self._update_visualizer_viewport()
         self._update_playlist_view()
         if self._current_track_path:
-            self._restart_hackscript()
+            resume_ms = self._get_playback_position_ms()
+            self._restart_hackscript(playback_pos_ms=resume_ms)
         elif self._visualizer and not self._frame_player.is_running:
             self._visualizer.update(self._render_visualizer())
 
@@ -1130,7 +1140,9 @@ class RhythmSlicerApp(App):
             self._last_visualizer_text = clipped
             self._visualizer.update(clipped)
 
-    def _start_hackscript(self, track_path: Path) -> None:
+    def _start_hackscript(
+        self, track_path: Path, *, playback_pos_ms: int | None = None
+    ) -> None:
         self._update_visualizer_viewport()
         resolved = track_path.expanduser().resolve()
         self._current_track_path = resolved
@@ -1139,6 +1151,8 @@ class RhythmSlicerApp(App):
             "viz": self._viz_name,
             "ansi_colors": self._ansi_colors,
         }
+        if playback_pos_ms is not None:
+            prefs["playback_pos_ms"] = playback_pos_ms
         self._viz_prefs = dict(prefs)
         frames = generate_hackscript(
             resolved,
@@ -1148,10 +1162,12 @@ class RhythmSlicerApp(App):
         )
         self._frame_player.start(frames)
 
-    def _restart_hackscript(self) -> None:
+    def _restart_hackscript(self, *, playback_pos_ms: int | None = None) -> None:
         if not self._current_track_path:
             return
-        self._start_hackscript(self._current_track_path)
+        self._start_hackscript(
+            self._current_track_path, playback_pos_ms=playback_pos_ms
+        )
 
     def _stop_hackscript(self) -> None:
         self._frame_player.stop()

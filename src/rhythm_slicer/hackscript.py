@@ -233,6 +233,12 @@ def _build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--width", type=int, default=80, help="Viewport width")
     parser.add_argument("--height", type=int, default=24, help="Viewport height")
     parser.add_argument("--prefs", default="{}", help="JSON preferences object")
+    parser.add_argument(
+        "--pos-ms",
+        type=int,
+        default=None,
+        help="Playback position in milliseconds",
+    )
     parser.add_argument("--seed", type=int, default=None, help="Seed override")
     parser.add_argument("--viz", default="hackscope", help="Visualization name")
     parser.add_argument("--fps", type=float, default=20.0, help="Frames per second")
@@ -243,6 +249,8 @@ def main(argv: list[str] | None = None) -> int:
     parser = _build_parser()
     args = parser.parse_args(argv)
     prefs = _parse_prefs(args.prefs)
+    if args.pos_ms is not None:
+        prefs["playback_pos_ms"] = args.pos_ms
     if "fps" not in prefs and args.fps:
         prefs["fps"] = args.fps
     viewport = (max(1, args.width), max(1, args.height))
