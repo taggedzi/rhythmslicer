@@ -89,6 +89,42 @@ def test_hackscope_ansi_visible_width() -> None:
     assert found
 
 
+def test_hackscope_truth_highlight_ansi() -> None:
+    ctx = VizContext(
+        track_path="song.mp3",
+        viewport_w=50,
+        viewport_h=10,
+        prefs={"ansi_colors": True, "fps": 20.0},
+        meta={
+            "title": "Song",
+            "artist": "Artist",
+            "codec": "mp3",
+            "bitrate_kbps": 320,
+        },
+        seed=123,
+    )
+    frame = next(generate_frames(ctx))
+    assert "\x1b[93m" in frame
+
+
+def test_hackscope_truth_highlight_no_ansi() -> None:
+    ctx = VizContext(
+        track_path="song.mp3",
+        viewport_w=50,
+        viewport_h=10,
+        prefs={"ansi_colors": False, "fps": 20.0},
+        meta={
+            "title": "Song",
+            "artist": "Artist",
+            "codec": "mp3",
+            "bitrate_kbps": 320,
+        },
+        seed=123,
+    )
+    frame = next(generate_frames(ctx))
+    assert "[=Song=]" in frame
+
+
 def test_hackscope_resume_changes_first_frame() -> None:
     ctx_zero = VizContext(
         track_path="song.mp3",
@@ -187,6 +223,8 @@ def test_hackscope_playing_advances_frames() -> None:
             "fps": 20.0,
             "playback_pos_ms": 0,
             "playback_state": "playing",
+            "hackscope_ambient_density": 0.2,
+            "hackscope_scanline": False,
         },
         meta={"title": "Song", "artist": "Artist", "duration_sec": 120},
         seed=321,

@@ -286,7 +286,7 @@ def test_render_transport_label_play_pause() -> None:
     app = tui.RhythmSlicerApp(player=player, path="song.mp3")
     assert app._render_transport_label().plain == "[ PAUSE ]"
     player.state = "paused"
-    assert app._render_transport_label().plain == "[ PLAY ]"
+    assert app._render_transport_label().plain == "[ PLAY ] "
 
 
 def test_transport_play_pause_clicks() -> None:

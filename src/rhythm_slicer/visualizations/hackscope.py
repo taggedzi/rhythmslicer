@@ -5,6 +5,7 @@ from __future__ import annotations
 from hashlib import sha256
 from pathlib import Path
 import os
+import random
 import re
 from typing import Iterator
 
@@ -20,6 +21,7 @@ _ANSI_GREEN = "\x1b[32m"
 _ANSI_YELLOW = "\x1b[33m"
 _ANSI_MAGENTA = "\x1b[35m"
 _ANSI_RED = "\x1b[31m"
+_ANSI_BRIGHT_YELLOW = "\x1b[93m"
 
 
 def _stable_seed(path: str) -> int:
@@ -138,6 +140,26 @@ def _color(text: str, code: str, enabled: bool) -> str:
     return f"{code}{text}{_ANSI_RESET}"
 
 
+def fmt_truth(ctx: VizContext, s: str) -> str:
+    """Highlight values derived from real metadata/facts."""
+    use_ansi = bool(ctx.prefs.get("ansi_colors", True))
+    if use_ansi:
+        return f"{_ANSI_BRIGHT_YELLOW}{s}{_ANSI_RESET}"
+    return f"[={s}=]"
+
+
+def fmt_label(ctx: VizContext, s: str) -> str:
+    """Dim label text for structure."""
+    use_ansi = bool(ctx.prefs.get("ansi_colors", True))
+    return _color(s, _ANSI_DIM, use_ansi)
+
+
+def fmt_sim(ctx: VizContext, s: str) -> str:
+    """Format simulated/flavor-only text."""
+    use_ansi = bool(ctx.prefs.get("ansi_colors", True))
+    return _color(s, _ANSI_DIM, use_ansi)
+
+
 def _strip_sgr(text: str) -> str:
     return _SGR_PATTERN.sub("", text)
 
@@ -170,6 +192,158 @@ def _pad_line(text: str, width: int) -> str:
     if visible < width:
         return text + (" " * (width - visible))
     return text
+
+
+def _ambient_rng(seed: int, global_frame: int) -> random.Random:
+    mixed = (seed ^ (global_frame * 0x9E3779B1)) & 0xFFFFFFFF
+    return random.Random(mixed)
+
+
+def _ambient_char(ch: str, use_ansi: bool) -> str:
+    if ch == " ":
+        return " "
+    if not use_ansi:
+        return ch
+    return f"{_ANSI_DIM}{ch}{_ANSI_RESET}"
+
+
+def render_ambient(
+    ctx: VizContext,
+    global_frame: int,
+    width: int,
+    height: int,
+    seed: int,
+    *,
+    use_ansi: bool = False,
+) -> list[str]:
+    prefs = ctx.prefs if isinstance(ctx.prefs, dict) else {}
+    enabled = bool(prefs.get("hackscope_ambient", True))
+    width = max(1, width)
+    height = max(1, height)
+    if not enabled:
+        return [" " * width for _ in range(height)]
+    density = _safe_float(prefs.get("hackscope_ambient_density", 0.012), 0.012)
+    density = max(0.0, min(0.2, density))
+    chars = ".:·"
+    rng = _ambient_rng(seed, global_frame)
+    lines: list[str] = []
+    for row in range(height):
+        if row == 0:
+            lines.append(" " * width)
+            continue
+        line_chars = []
+        for _ in range(width):
+            if rng.random() < density:
+                line_chars.append(chars[rng.randrange(len(chars))])
+            else:
+                line_chars.append(" ")
+        lines.append("".join(line_chars))
+    if bool(prefs.get("hackscope_scanline", True)) and height > 1:
+        period = 80
+        scan_row = 1 + ((global_frame // period) % max(1, height - 1))
+        lines[scan_row] = "." * width
+    blink = (global_frame // 10) % 2
+    if blink == 1 and height > 0 and width > 0:
+        row = list(lines[-1])
+        row[0] = "_"
+        lines[-1] = "".join(row)
+    return lines
+
+
+def _overlay_ambient_line(
+    content: str, ambient: str, width: int, use_ansi: bool
+) -> str:
+    out: list[str] = []
+    visible = 0
+    idx = 0
+    while idx < len(content) and visible < width:
+        if content[idx] == "\x1b" and idx + 1 < len(content) and content[idx + 1] == "[":
+            end = content.find("m", idx + 2)
+            if end != -1:
+                out.append(content[idx : end + 1])
+                idx = end + 1
+                continue
+        ch = content[idx]
+        idx += 1
+        if ch == " ":
+            out.append(_ambient_char(ambient[visible], use_ansi))
+        else:
+            out.append(ch)
+        visible += 1
+    while visible < width:
+        out.append(_ambient_char(ambient[visible], use_ansi))
+        visible += 1
+    return "".join(out)
+
+
+def _apply_ambient_frame(
+    frame: str,
+    ambient_lines: list[str],
+    width: int,
+    height: int,
+    use_ansi: bool,
+) -> str:
+    lines = frame.splitlines()
+    if not lines:
+        lines = [""]
+    while len(lines) < height:
+        lines.append("")
+    lines = lines[:height]
+    out_lines: list[str] = []
+    for idx in range(height):
+        ambient = ambient_lines[idx] if idx < len(ambient_lines) else " " * width
+        out_lines.append(_overlay_ambient_line(lines[idx], ambient, width, use_ansi))
+    return "\n".join(out_lines)
+
+
+def _truth_or_unknown(ctx: VizContext, value: str | None) -> str:
+    if value:
+        return fmt_truth(ctx, value)
+    return fmt_sim(ctx, "Unknown")
+
+
+def _truth_footer(ctx: VizContext, meta: dict, width: int) -> str:
+    title = _meta_value(meta, "title")
+    artist = _meta_value(meta, "artist")
+    codec = _meta_value(meta, "codec")
+    bitrate_kbps = _meta_int(meta, "bitrate_kbps")
+    sample_rate = _meta_int(meta, "sample_rate_hz")
+    channels = _meta_int(meta, "channels")
+
+    title_text = _truth_or_unknown(ctx, title)
+    artist_text = _truth_or_unknown(ctx, artist)
+    codec_text = _truth_or_unknown(ctx, codec)
+    if bitrate_kbps is not None:
+        bitrate_text = fmt_truth(ctx, f"{bitrate_kbps}kbps")
+    else:
+        bitrate_text = fmt_sim(ctx, "Unknown")
+    if sample_rate is not None:
+        sample_text = fmt_truth(ctx, f"{sample_rate}Hz")
+    else:
+        sample_text = fmt_sim(ctx, "Unknown")
+    if channels is not None:
+        channels_text = fmt_truth(ctx, f"{channels}ch")
+    else:
+        channels_text = fmt_sim(ctx, "Unknown")
+
+    line = (
+        f"{fmt_label(ctx, 'INFO')}: {title_text} - {artist_text} | "
+        f"{codec_text} {bitrate_text} | {sample_text} {channels_text}"
+    )
+    return _pad_line(line, width)
+
+
+def _apply_truth_footer(
+    frame: str, footer: str, width: int, height: int
+) -> str:
+    lines = frame.splitlines()
+    if not lines:
+        lines = [""]
+    while len(lines) < height:
+        lines.append("")
+    lines = lines[:height]
+    lines[-1] = _pad_line(footer, width)
+    return "\n".join(lines)
 
 
 def _allocate_phases(
@@ -278,6 +452,7 @@ def _frame_seed(base_seed: int, phase_name: str, local_i: int) -> int:
 
 
 def render_boot(
+    ctx: VizContext,
     stage_id: str,
     width: int,
     height: int,
@@ -301,10 +476,12 @@ def render_boot(
         _ANSI_GREEN,
         use_ansi,
     )
+    note = f"{fmt_label(ctx, 'note')}: {fmt_sim(ctx, 'highlighted fields are derived from file metadata')}"
     lines = [
         f"{header} BOOT [{stage_id}]",
         "",
         line,
+        note,
         "",
         f"{_color('progress', _ANSI_DIM, use_ansi)}: {pct:3d}% [{bar}]",
     ]
@@ -312,6 +489,7 @@ def render_boot(
 
 
 def render_ice(
+    ctx: VizContext,
     stage_id: str,
     title: str,
     width: int,
@@ -328,9 +506,10 @@ def render_ice(
     right_w = max(0, width - left_w - (1 if width >= 3 else 0))
     bar_w = max(8, right_w - 6) if right_w > 0 else max(12, width - 18)
 
+    title_text = _truth_or_unknown(ctx, title)
     base_log = [
-        f">> target: {title}",
-        f">> session: {stage_id}",
+        f">> target: {title_text}",
+        f">> session: {fmt_sim(ctx, stage_id)}",
         ">> link: establish",
         ">> probe: perimeter",
         ">> ice: detect",
@@ -375,6 +554,7 @@ def render_ice(
 
 
 def render_map(
+    ctx: VizContext,
     stage_id: str,
     meta: dict,
     width: int,
@@ -398,26 +578,26 @@ def render_map(
         y = 1 + (next(prng) % max(1, lattice_h - 2))
         nodes.append((x, y))
 
-    title = _meta_value(meta, "title") or "Unknown"
-    artist = _meta_value(meta, "artist") or "Unknown"
-    album = _meta_value(meta, "album") or "Unknown"
-    codec = _meta_value(meta, "codec") or "Unknown"
-    container = _meta_value(meta, "container") or "Unknown"
+    title = _meta_value(meta, "title")
+    artist = _meta_value(meta, "artist")
+    album = _meta_value(meta, "album")
+    codec = _meta_value(meta, "codec")
+    container = _meta_value(meta, "container")
     sample = _meta_int(meta, "sample_rate_hz")
     channels = _meta_int(meta, "channels")
-    sample_text = f"{sample} Hz" if sample else "Unknown"
-    channels_text = str(channels) if channels else "Unknown"
+    sample_text = f"{sample} Hz" if sample else None
+    channels_text = str(channels) if channels else None
 
     base_log = [
         ">> mapping nodes (simulated)",
         ">> enumerating ports (simulated)",
-        f">> title: {title}",
-        f">> artist: {artist}",
-        f">> album: {album}",
-        f">> codec: {codec}",
-        f">> container: {container}",
-        f">> sample: {sample_text}",
-        f">> channels: {channels_text}",
+        f">> title: {_truth_or_unknown(ctx, title)}",
+        f">> artist: {_truth_or_unknown(ctx, artist)}",
+        f">> album: {_truth_or_unknown(ctx, album)}",
+        f">> codec: {_truth_or_unknown(ctx, codec)}",
+        f">> container: {_truth_or_unknown(ctx, container)}",
+        f">> sample: {_truth_or_unknown(ctx, sample_text)}",
+        f">> channels: {_truth_or_unknown(ctx, channels_text)}",
     ]
     header = _color("[HackScope]", _ANSI_CYAN, use_ansi)
     total = max(1, phase_len)
@@ -515,6 +695,7 @@ def render_defrag(
 
 
 def render_decrypt(
+    ctx: VizContext,
     stage_id: str,
     meta: dict,
     width: int,
@@ -527,23 +708,23 @@ def render_decrypt(
 ) -> str:
     """Flavor-only: 'decrypt/extract' display using only real metadata."""
     prng = _lcg(_frame_seed(seed, "DECRYPT", local_i))
-    title = _meta_value(meta, "title") or "Unknown"
-    container = _meta_value(meta, "container") or "Unknown"
-    codec = _meta_value(meta, "codec") or "Unknown"
+    title = _meta_value(meta, "title")
+    container = _meta_value(meta, "container")
+    codec = _meta_value(meta, "codec")
     bitrate_kbps = _meta_int(meta, "bitrate_kbps")
     sample_rate = _meta_int(meta, "sample_rate_hz")
     channels = _meta_int(meta, "channels")
 
-    bitrate = f"{bitrate_kbps} kbps" if bitrate_kbps else "Unknown"
-    sample = f"{sample_rate} Hz" if sample_rate else "Unknown"
-    channels_text = str(channels) if channels else "Unknown"
+    bitrate = f"{bitrate_kbps} kbps" if bitrate_kbps else None
+    sample = f"{sample_rate} Hz" if sample_rate else None
+    channels_text = str(channels) if channels else None
 
     base = [
-        f">> container: {container}",
-        f">> codec: {codec}",
-        f">> bitrate: {bitrate}",
-        f">> sample: {sample}",
-        f">> channels: {channels_text}",
+        f">> container: {_truth_or_unknown(ctx, container)}",
+        f">> codec: {_truth_or_unknown(ctx, codec)}",
+        f">> bitrate: {_truth_or_unknown(ctx, bitrate)}",
+        f">> sample: {_truth_or_unknown(ctx, sample)}",
+        f">> channels: {_truth_or_unknown(ctx, channels_text)}",
         ">> payload: locate",
         ">> keyslot: derive (simulated)",
         ">> decrypt: stream start (simulated)",
@@ -565,7 +746,7 @@ def render_decrypt(
     progress_bar = _color(progress_bar, _ANSI_GREEN, use_ansi)
     lines: list[str] = [
         header,
-        f"{_color('track', _ANSI_DIM, use_ansi)}: {title}",
+        f"{fmt_label(ctx, 'track')}: {_truth_or_unknown(ctx, title)}",
         "",
         f"{_color('progress', _ANSI_DIM, use_ansi)}: {pct:3d}%  [{progress_bar}]",
         "",
@@ -578,6 +759,7 @@ def render_decrypt(
 
 
 def render_extract(
+    ctx: VizContext,
     stage_id: str,
     meta: dict,
     width: int,
@@ -589,13 +771,13 @@ def render_extract(
     use_ansi: bool = False,
 ) -> str:
     prng = _lcg(_frame_seed(seed, "EXTRACT", local_i))
-    title = _meta_value(meta, "title") or "Unknown"
-    artist = _meta_value(meta, "artist") or "Unknown"
-    album = _meta_value(meta, "album") or "Unknown"
+    title = _meta_value(meta, "title")
+    artist = _meta_value(meta, "artist")
+    album = _meta_value(meta, "album")
     base = [
-        f">> title: {title}",
-        f">> artist: {artist}",
-        f">> album: {album}",
+        f">> title: {_truth_or_unknown(ctx, title)}",
+        f">> artist: {_truth_or_unknown(ctx, artist)}",
+        f">> album: {_truth_or_unknown(ctx, album)}",
         ">> extract: verified (simulated)",
         ">> checksum: ok (simulated)",
     ]
@@ -611,7 +793,7 @@ def render_extract(
     )
     lines = [
         header,
-        f"{_color('track', _ANSI_DIM, use_ansi)}: {title}",
+        f"{fmt_label(ctx, 'track')}: {_truth_or_unknown(ctx, title)}",
         "",
         f"{_color('progress', _ANSI_DIM, use_ansi)}: {pct:3d}%  [{bar}]",
         "",
@@ -626,6 +808,7 @@ def render_extract(
 
 
 def render_scan(
+    ctx: VizContext,
     stage_id: str,
     facts: dict[str, str | None],
     width: int,
@@ -639,16 +822,21 @@ def render_scan(
     prng = _lcg(_frame_seed(seed, "SCAN", local_i))
     header = f"{_color('[HackScope]', _ANSI_CYAN, use_ansi)} SCAN / FILE FACTS [{stage_id}]"
     total = max(1, phase_len)
-    size = facts.get("size") or "Unknown"
-    path = facts.get("path") or "Unknown"
+    size = facts.get("size")
+    path = facts.get("path")
     hash_label = facts.get("hash_label")
     hash_value = facts.get("hash")
     base = [
-        f">> size: {size}",
-        f">> path: {path}",
+        f">> size: {_truth_or_unknown(ctx, size)}",
+        f">> path: {_truth_or_unknown(ctx, path)}",
     ]
     if hash_label:
-        base.append(f">> {hash_label}: {hash_value or 'Unavailable'}")
+        hash_label_text = fmt_truth(ctx, hash_label)
+        if hash_value:
+            hash_value_text = fmt_truth(ctx, hash_value)
+        else:
+            hash_value_text = fmt_sim(ctx, "Unavailable")
+        base.append(f">> {hash_label_text}: {hash_value_text}")
     base.append(">> scan: ok (simulated)")
     pct = int((local_i / max(1, total - 1)) * 100)
     shown = 1 + (local_i * len(base) // max(1, total - 1))
@@ -674,6 +862,7 @@ def render_scan(
 
 
 def render_cover(
+    ctx: VizContext,
     stage_id: str,
     meta: dict,
     width: int,
@@ -685,10 +874,10 @@ def render_cover(
     use_ansi: bool = False,
 ) -> str:
     prng = _lcg(_frame_seed(seed, "COVER", local_i))
-    title = _meta_value(meta, "title") or "Unknown"
-    artist = _meta_value(meta, "artist") or "Unknown"
-    codec = _meta_value(meta, "codec") or "Unknown"
-    container = _meta_value(meta, "container") or "Unknown"
+    title = _meta_value(meta, "title")
+    artist = _meta_value(meta, "artist")
+    codec = _meta_value(meta, "codec")
+    container = _meta_value(meta, "container")
     header = f"{_color('[HackScope]', _ANSI_CYAN, use_ansi)} COVER TRACKS [{stage_id}]"
     total = max(1, phase_len)
     pct = int((local_i / max(1, total - 1)) * 100)
@@ -699,10 +888,10 @@ def render_cover(
         "",
         f"{_color('redacting', _ANSI_DIM, use_ansi)}: {pct:3d}% [{scrub}]",
         "",
-        f">> summary: {title}",
-        f">> artist: {artist}",
-        f">> codec: {codec}",
-        f">> container: {container}",
+        f">> summary: {_truth_or_unknown(ctx, title)}",
+        f">> artist: {_truth_or_unknown(ctx, artist)}",
+        f">> codec: {_truth_or_unknown(ctx, codec)}",
+        f">> container: {_truth_or_unknown(ctx, container)}",
     ]
     if (next(prng) % 5) == 0:
         lines.append(">> logs: scrubbed (simulated)")
@@ -713,10 +902,10 @@ def render_cover(
 
 
 def render_dossier(
+    ctx: VizContext,
     track_path: str,
     meta: dict,
     viewport: tuple[int, int],
-    prefs: dict,
     local_i: int,
     phase_len: int,
     *,
@@ -724,15 +913,16 @@ def render_dossier(
 ) -> str:
     del local_i, phase_len
     return _render_dossier(
+        ctx,
         track_path,
         meta,
         viewport,
-        prefs,
         use_ansi=use_ansi,
     )
 
 
 def render_idle(
+    ctx: VizContext,
     stage_id: str,
     track_path: str,
     meta: dict,
@@ -745,7 +935,7 @@ def render_idle(
 ) -> str:
     prng = _lcg(_frame_seed(seed, "IDLE", local_i))
     title = _meta_value(meta, "title") or Path(track_path).name
-    artist = _meta_value(meta, "artist") or "Unknown"
+    artist = _meta_value(meta, "artist")
     spinner = "|/-\\"
     status_lines = [
         "idle: monitoring playback",
@@ -758,8 +948,8 @@ def render_idle(
     lines = [
         header,
         "",
-        f"{_color('now playing', _ANSI_DIM, use_ansi)}: {title}",
-        f"{_color('artist', _ANSI_DIM, use_ansi)}: {artist}",
+        f"{fmt_label(ctx, 'now playing')}: {_truth_or_unknown(ctx, title)}",
+        f"{fmt_label(ctx, 'artist')}: {_truth_or_unknown(ctx, artist)}",
         "",
         f"{_color('status', _ANSI_DIM, use_ansi)}: {status}",
     ]
@@ -772,42 +962,48 @@ def render_idle(
 
 
 def _render_dossier(
+    ctx: VizContext,
     track_path: str,
     meta: dict,
     viewport: tuple[int, int],
-    prefs: dict,
     *,
     use_ansi: bool = False,
 ) -> str:
     width, height = viewport
-    show_absolute = bool(prefs.get("show_absolute_paths"))
+    show_absolute = bool(ctx.prefs.get("show_absolute_paths"))
     path = Path(track_path)
     path_label = str(path) if show_absolute else path.name
 
     title = _meta_value(meta, "title") or path.name
-    artist = _meta_value(meta, "artist") or "Unknown"
-    album = _meta_value(meta, "album") or "Unknown"
-    duration = _format_duration(_meta_int(meta, "duration_sec")) or "Unknown"
-    codec = _meta_value(meta, "codec") or "Unknown"
-    container = _meta_value(meta, "container") or "Unknown"
+    artist = _meta_value(meta, "artist")
+    album = _meta_value(meta, "album")
+    duration = _format_duration(_meta_int(meta, "duration_sec"))
+    codec = _meta_value(meta, "codec")
+    container = _meta_value(meta, "container")
     bitrate = _meta_int(meta, "bitrate_kbps")
     sample_rate = _meta_int(meta, "sample_rate_hz")
     channels = _meta_int(meta, "channels")
 
     heading = _color("=== HACKSCRIPT DOSSIER ===", _ANSI_CYAN, use_ansi)
-    label = lambda text: _color(text, _ANSI_DIM, use_ansi)
+    label = lambda text: fmt_label(ctx, text)
     lines = [
         heading,
-        f"{label('Title')}    : {title}",
-        f"{label('Artist')}   : {artist}",
-        f"{label('Album')}    : {album}",
-        f"{label('Path')}     : {path_label}",
-        f"{label('Length')}   : {duration}",
-        f"{label('Codec')}    : {codec}",
-        f"{label('Container')}: {container}",
-        f"{label('Bitrate')}  : {bitrate} kbps" if bitrate else f"{label('Bitrate')}  : Unknown",
-        f"{label('Sample')}   : {sample_rate} Hz" if sample_rate else f"{label('Sample')}   : Unknown",
-        f"{label('Channels')} : {channels}" if channels else f"{label('Channels')} : Unknown",
+        f"{label('Title')}    : {_truth_or_unknown(ctx, title)}",
+        f"{label('Artist')}   : {_truth_or_unknown(ctx, artist)}",
+        f"{label('Album')}    : {_truth_or_unknown(ctx, album)}",
+        f"{label('Path')}     : {_truth_or_unknown(ctx, path_label)}",
+        f"{label('Length')}   : {_truth_or_unknown(ctx, duration)}",
+        f"{label('Codec')}    : {_truth_or_unknown(ctx, codec)}",
+        f"{label('Container')}: {_truth_or_unknown(ctx, container)}",
+        f"{label('Bitrate')}  : {fmt_truth(ctx, f'{bitrate} kbps')}"
+        if bitrate
+        else f"{label('Bitrate')}  : {fmt_sim(ctx, 'Unknown')}",
+        f"{label('Sample')}   : {fmt_truth(ctx, f'{sample_rate} Hz')}"
+        if sample_rate
+        else f"{label('Sample')}   : {fmt_sim(ctx, 'Unknown')}",
+        f"{label('Channels')} : {fmt_truth(ctx, str(channels))}"
+        if channels
+        else f"{label('Channels')} : {fmt_sim(ctx, 'Unknown')}",
     ]
     return _pad_to_viewport(lines, width, height)
 
@@ -867,6 +1063,7 @@ def generate_frames(ctx: VizContext) -> Iterator[str]:
             phase_len = phase_len_map.get(phase_name, 1)
             if phase_name == "BOOT":
                 frame = render_boot(
+                    ctx,
                     stage_id,
                     width,
                     height,
@@ -876,6 +1073,7 @@ def generate_frames(ctx: VizContext) -> Iterator[str]:
                 )
             elif phase_name == "ICE":
                 frame = render_ice(
+                    ctx,
                     stage_id,
                     title,
                     width,
@@ -887,6 +1085,7 @@ def generate_frames(ctx: VizContext) -> Iterator[str]:
                 )
             elif phase_name == "MAP":
                 frame = render_map(
+                    ctx,
                     stage_id,
                     meta,
                     width,
@@ -908,6 +1107,7 @@ def generate_frames(ctx: VizContext) -> Iterator[str]:
                 )
             elif phase_name == "SCAN":
                 frame = render_scan(
+                    ctx,
                     stage_id,
                     facts,
                     width,
@@ -919,6 +1119,7 @@ def generate_frames(ctx: VizContext) -> Iterator[str]:
                 )
             elif phase_name == "DECRYPT":
                 frame = render_decrypt(
+                    ctx,
                     stage_id,
                     meta,
                     width,
@@ -930,6 +1131,7 @@ def generate_frames(ctx: VizContext) -> Iterator[str]:
                 )
             elif phase_name == "EXTRACT":
                 frame = render_extract(
+                    ctx,
                     stage_id,
                     meta,
                     width,
@@ -941,6 +1143,7 @@ def generate_frames(ctx: VizContext) -> Iterator[str]:
                 )
             elif phase_name == "COVER":
                 frame = render_cover(
+                    ctx,
                     stage_id,
                     meta,
                     width,
@@ -952,16 +1155,17 @@ def generate_frames(ctx: VizContext) -> Iterator[str]:
                 )
             elif phase_name == "DOSSIER":
                 frame = render_dossier(
+                    ctx,
                     ctx.track_path,
                     meta,
                     (width, height),
-                    ctx.prefs,
                     local_i,
                     phase_len,
                     use_ansi=use_ansi,
                 )
             else:
                 frame = render_idle(
+                    ctx,
                     stage_id,
                     ctx.track_path,
                     meta,
@@ -974,6 +1178,7 @@ def generate_frames(ctx: VizContext) -> Iterator[str]:
         else:
             idle_i = frame_index - total_scripted
             frame = render_idle(
+                ctx,
                 stage_id,
                 ctx.track_path,
                 meta,
@@ -983,6 +1188,18 @@ def generate_frames(ctx: VizContext) -> Iterator[str]:
                 idle_i,
                 use_ansi=use_ansi,
             )
+        footer = _truth_footer(ctx, meta, width)
+        frame = _apply_truth_footer(frame, footer, width, height)
+        if bool(ctx.prefs.get("hackscope_ambient", True)):
+            ambient = render_ambient(
+                ctx,
+                frame_index,
+                width,
+                height,
+                seed,
+                use_ansi=use_ansi,
+            )
+            frame = _apply_ambient_frame(frame, ambient, width, height, use_ansi)
         yield frame
         if not paused:
             global_frame += 1
