@@ -1,6 +1,16 @@
+$bg: #05070b;
+$panelA: #0b1217;
+$panelB: #100a14;
+$cyan: #5fc9d6;
+$magenta: #ff4fd8;
+$text: #c6d0f2;
+$text_dim: #8a93a3;
+
 Screen {
     layout: vertical;
     border: round $accent;
+    background: $bg;
+    color: $text;
 }
 
 #header {
@@ -18,8 +28,9 @@ Screen {
     width: 1fr;
     min-width: 24;
     height: 1fr;
-    border: round $primary;
-    background: $panel;
+    border: round $cyan;
+    border-title-color: $cyan;
+    background: $panelA;
     padding: 0 1;
 }
 
@@ -27,6 +38,7 @@ Screen {
     width: 1fr;
     min-width: 24;
     height: 1fr;
+    background: $panelB;
 }
 
 #playlist_list {
@@ -35,6 +47,7 @@ Screen {
     overflow-y: auto;
     content-align: left top;
     text-wrap: nowrap;
+    color: $text_dim;
 }
 
 #playlist_footer {
@@ -67,8 +80,11 @@ Screen {
 #visualizer {
     height: 1fr;
     width: 1fr;
-    border: round $primary;
+    border: heavy $magenta;
+    border-title-color: $magenta;
+    text-style: bold;
     content-align: center middle;
+    background: $panelB;
 }
 
 #status {
@@ -77,6 +93,7 @@ Screen {
     content-align: left middle;
     text-wrap: nowrap;
     text-overflow: ellipsis;
+    color: $text_dim;
 }
 
 #progress {

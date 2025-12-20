@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from typing import Optional
+import threading
 
 try:
     import vlc  # type: ignore
@@ -24,17 +25,44 @@ class VlcPlayer:
         self._instance = vlc.Instance()
         self._player = self._instance.media_player_new()
         self._current_media: Optional[str] = None
+        self._end_reached = threading.Event()
+        self._attach_end_reached_event()
+
+    def _attach_end_reached_event(self) -> None:
+        try:
+            event_manager = self._player.event_manager()
+            event_manager.event_attach(
+                vlc.EventType.MediaPlayerEndReached, self._handle_end_reached
+            )
+        except Exception:
+            return
+
+    def _handle_end_reached(self, event: object) -> None:
+        del event
+        self._end_reached.set()
 
     @property
     def current_media(self) -> Optional[str]:
         """Return the current media path if loaded."""
         return self._current_media
 
+    def consume_end_reached(self) -> bool:
+        """Return True if an end-reached event fired since last check."""
+        if self._end_reached.is_set():
+            self._end_reached.clear()
+            return True
+        return False
+
+    def signal_end_reached(self) -> None:
+        """Manually flag end reached (for tests)."""
+        self._end_reached.set()
+
     def load(self, path: str) -> None:
         """Load media into the player."""
         media = self._instance.media_new(path)
         self._player.set_media(media)
         self._current_media = path
+        self._end_reached.clear()
 
     def play(self) -> None:
         """Start playback."""

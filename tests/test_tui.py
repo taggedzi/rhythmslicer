@@ -21,6 +21,7 @@ class DummyPlayer:
         self.volume = 100
         self.seeks: list[int] = []
         self.loaded: list[str] = []
+        self._end_reached = False
 
     def get_state(self) -> str:
         return self.state
@@ -53,6 +54,15 @@ class DummyPlayer:
         self.seeks.append(delta_ms)
         return True
 
+    def consume_end_reached(self) -> bool:
+        if self._end_reached:
+            self._end_reached = False
+            return True
+        return False
+
+    def signal_end_reached(self) -> None:
+        self._end_reached = True
+
 
 class DummyPlayerNoSeek(DummyPlayer):
     seek_ms = None  # type: ignore[assignment]
@@ -83,6 +93,13 @@ def test_toggle_playback_pauses_when_playing() -> None:
 
 def test_toggle_playback_plays_when_paused() -> None:
     player = DummyPlayer(state="paused")
+    app = tui.RhythmSlicerApp(player=player, path="song.mp3")
+    app.action_toggle_playback()
+    assert player.play_calls == 1
+
+
+def test_toggle_playback_plays_when_stopped() -> None:
+    player = DummyPlayer(state="stopped")
     app = tui.RhythmSlicerApp(player=player, path="song.mp3")
     app.action_toggle_playback()
     assert player.play_calls == 1
@@ -135,6 +152,70 @@ def test_build_play_order_shuffle_keeps_current() -> None:
     rng = __import__("random").Random(2)
     order, pos = tui.build_play_order(5, 3, True, rng)
     assert order[pos] == 3
+
+
+def test_next_index_respects_wrap_and_shuffle() -> None:
+    app = tui.RhythmSlicerApp(player=DummyPlayer(), path="song.mp3")
+    app.playlist = Playlist(
+        [
+            Track(path=Path("one.mp3"), title="one.mp3"),
+            Track(path=Path("two.mp3"), title="two.mp3"),
+            Track(path=Path("three.mp3"), title="three.mp3"),
+        ]
+    )
+    app._play_order = [1, 0, 2]
+    app._play_order_pos = 2
+    assert app._next_index(wrap=False) is None
+    assert app._next_index(wrap=True) == 1
+
+
+def test_end_reached_advances_track() -> None:
+    app = tui.RhythmSlicerApp(player=DummyPlayer(), path="song.mp3")
+    app.playlist = Playlist(
+        [
+            Track(path=Path("one.mp3"), title="one.mp3"),
+            Track(path=Path("two.mp3"), title="two.mp3"),
+        ]
+    )
+    app.playlist.set_index(0)
+    app._reset_play_order()
+    app.player.signal_end_reached()
+    app._on_tick()
+    assert app.playlist.index == 1
+
+
+def test_end_reached_repeats_one() -> None:
+    player = DummyPlayer()
+    app = tui.RhythmSlicerApp(player=player, path="song.mp3")
+    app.playlist = Playlist(
+        [
+            Track(path=Path("one.mp3"), title="one.mp3"),
+            Track(path=Path("two.mp3"), title="two.mp3"),
+        ]
+    )
+    app.playlist.set_index(1)
+    app._repeat_mode = "one"
+    app._reset_play_order()
+    app.player.signal_end_reached()
+    app._on_tick()
+    assert app.playlist.index == 1
+    assert player.play_calls == 1
+
+
+def test_end_reached_wraps_when_repeat_all() -> None:
+    app = tui.RhythmSlicerApp(player=DummyPlayer(), path="song.mp3")
+    app.playlist = Playlist(
+        [
+            Track(path=Path("one.mp3"), title="one.mp3"),
+            Track(path=Path("two.mp3"), title="two.mp3"),
+        ]
+    )
+    app.playlist.set_index(1)
+    app._repeat_mode = "all"
+    app._reset_play_order()
+    app.player.signal_end_reached()
+    app._on_tick()
+    assert app.playlist.index == 0
 
 
 def test_playlist_footer_empty() -> None:
@@ -192,8 +273,12 @@ def test_render_repeat_and_shuffle_labels() -> None:
     app = tui.RhythmSlicerApp(player=DummyPlayer(), path="song.mp3")
     app._repeat_mode = "all"
     app._shuffle = True
-    assert app._render_repeat_label() == "R:ALL"
-    assert app._render_shuffle_label() == "S:ON"
+    repeat = app._render_repeat_label()
+    shuffle = app._render_shuffle_label()
+    assert repeat.plain == "R:ALL"
+    assert repeat.style == "#9cff57"
+    assert shuffle.plain == "S:ON"
+    assert shuffle.style == "#9cff57"
 
 
 def test_render_transport_label_play_pause() -> None:
