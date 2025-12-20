@@ -125,6 +125,7 @@ def test_play_selected_uses_list_selection() -> None:
     app = tui.RhythmSlicerApp(player=player, path="song.mp3", playlist=playlist)
 
     app._selection_index = 1
+    playlist.set_index(1)
     app.action_play_selected()
     assert playlist.index == 1
     assert player.loaded[-1] == "two.mp3"

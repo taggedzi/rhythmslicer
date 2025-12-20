@@ -23,6 +23,7 @@ Screen {
     padding: 0 0 0 1;
     overflow-y: auto;
     content-align: left top;
+    text-wrap: nowrap;
 }
 
 #visualizer {

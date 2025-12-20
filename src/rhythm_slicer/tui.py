@@ -12,6 +12,7 @@ try:
     from textual.app import App, ComposeResult
     from textual.binding import Binding
     from textual.containers import Container, Vertical
+    from textual import events
     from textual.widgets import Static
 except Exception as exc:  # pragma: no cover - depends on environment
     raise RuntimeError(
@@ -106,6 +107,8 @@ class RhythmSlicerApp(App):
         self._now = now
         self._selection_index = 0
         self._scroll_offset = 0
+        self._last_click_time = 0.0
+        self._last_click_index: Optional[int] = None
         self._message: Optional[TuiMessage] = None
         self._header: Optional[Static] = None
         self._visualizer: Optional[Static] = None
@@ -222,8 +225,7 @@ class RhythmSlicerApp(App):
     def _sync_selection(self) -> None:
         if not self._playlist_list or not self.playlist or self.playlist.is_empty():
             return
-        self._selection_index = self.playlist.index
-        self._update_playlist_view()
+        self._set_selected(self.playlist.index)
 
     def _play_current_track(self) -> bool:
         if not self.playlist or self.playlist.is_empty():
@@ -327,35 +329,38 @@ class RhythmSlicerApp(App):
     def action_move_up(self) -> None:
         if not self.playlist or self.playlist.is_empty():
             return
-        self._selection_index = max(0, self._selection_index - 1)
-        self._update_playlist_view()
+        self._set_selected(max(0, self._selection_index - 1))
 
     def action_move_down(self) -> None:
         if not self.playlist or self.playlist.is_empty():
             return
-        self._selection_index = min(len(self.playlist.tracks) - 1, self._selection_index + 1)
-        self._update_playlist_view()
+        self._set_selected(
+            min(len(self.playlist.tracks) - 1, self._selection_index + 1)
+        )
 
     def action_play_selected(self) -> None:
         if not self.playlist or self.playlist.is_empty():
             self._set_message("No tracks loaded")
             return
-        selection = self._selection_index
-        self.playlist.set_index(selection)
-        if not self._play_current_track():
-            self._skip_failed_track()
-        self._sync_selection()
+        self._play_selected()
 
     def _update_playlist_view(self) -> None:
         if not self._playlist_list or not self.playlist:
             return
+        width = self._playlist_width()
         lines: list[str] = []
         for idx, track in enumerate(self.playlist.tracks):
             marker = "▶" if idx == self.playlist.index else " "
             selector = "➤" if idx == self._selection_index else " "
-            lines.append(f"{marker}{selector} {idx + 1:>3}  {track.title}")
-        height = getattr(self._playlist_list, "size", None)
-        view_height = max(1, getattr(height, "height", len(lines)) or len(lines))
+            prefix = f"{marker}{selector} {idx + 1:>3}  "
+            title_space = max(1, width - len(prefix))
+            title = track.title
+            if len(title) > title_space:
+                title = title[: max(1, title_space - 1)] + "…"
+            else:
+                title = title.ljust(title_space)
+            lines.append(prefix + title)
+        view_height = self._playlist_view_height()
         max_offset = max(0, len(lines) - view_height)
         self._scroll_offset = min(self._scroll_offset, max_offset)
         if self._selection_index < self._scroll_offset:
@@ -368,6 +373,104 @@ class RhythmSlicerApp(App):
         if len(visible) < view_height:
             visible.extend([""] * (view_height - len(visible)))
         self._playlist_list.update("\n".join(visible))
+
+    def _playlist_width(self) -> int:
+        if not self._playlist_list:
+            return 40
+        size = getattr(self._playlist_list, "content_size", None) or getattr(
+            self._playlist_list, "size", None
+        )
+        width = getattr(size, "width", 0) if size else 0
+        return max(30, width)
+
+    def _playlist_view_height(self) -> int:
+        if not self._playlist_list:
+            return 1
+        size = getattr(self._playlist_list, "content_size", None) or getattr(
+            self._playlist_list, "size", None
+        )
+        height = getattr(size, "height", 0) if size else 0
+        if height <= 0 and self.playlist:
+            height = len(self.playlist.tracks)
+        return max(1, height)
+
+    def _row_to_index(self, row: int) -> Optional[int]:
+        if not self.playlist or self.playlist.is_empty():
+            return None
+        view_height = self._playlist_view_height()
+        if row < 0 or row >= view_height:
+            return None
+        index = self._scroll_offset + row
+        if index >= len(self.playlist.tracks):
+            return None
+        return index
+
+    def _set_selected(self, index: int) -> None:
+        if not self.playlist or self.playlist.is_empty():
+            return
+        index = max(0, min(index, len(self.playlist.tracks) - 1))
+        self._selection_index = index
+        self.playlist.set_index(index)
+        self._update_playlist_view()
+
+    def _play_selected(self) -> None:
+        if not self.playlist or self.playlist.is_empty():
+            self._set_message("No tracks loaded")
+            return
+        if not self._play_current_track():
+            self._skip_failed_track()
+        self._sync_selection()
+
+    def on_mouse_down(self, event: events.MouseDown) -> None:
+        if not self._playlist_list:
+            return
+        region = getattr(self._playlist_list, "region", None)
+        if region and not region.contains(event.x, event.y):
+            return
+        row = (
+            int(event.y - region.y + 1)
+            if region
+            else int(getattr(event, "offset_y", event.y) + 1)
+        )
+        index = self._row_to_index(row)
+        if index is None:
+            return
+        now = self._now()
+        if (
+            self._last_click_index == index
+            and now - self._last_click_time <= 0.4
+        ):
+            self._set_selected(index)
+            self._play_selected()
+        else:
+            self._set_selected(index)
+        self._last_click_index = index
+        self._last_click_time = now
+
+    def on_mouse_scroll_down(self, event: events.MouseScrollDown) -> None:
+        if not self._playlist_list:
+            return
+        region = getattr(self._playlist_list, "region", None)
+        if region and not region.contains(event.x, event.y):
+            return
+        max_offset = (
+            max(0, len(self.playlist.tracks) - self._playlist_view_height())
+            if self.playlist
+            else 0
+        )
+        self._scroll_offset = min(self._scroll_offset + 1, max_offset)
+        self._update_playlist_view()
+        event.stop()
+
+    def on_mouse_scroll_up(self, event: events.MouseScrollUp) -> None:
+        if not self._playlist_list:
+            return
+        region = getattr(self._playlist_list, "region", None)
+        if region and not region.contains(event.x, event.y):
+            return
+        self._scroll_offset = max(0, self._scroll_offset - 1)
+        self._update_playlist_view()
+        event.stop()
 
 
 def _truncate_line(text: str, max_width: int) -> str:
