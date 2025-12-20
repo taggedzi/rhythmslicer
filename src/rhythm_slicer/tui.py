@@ -205,6 +205,7 @@ class RhythmSlicerApp(App):
         self._repeat_mode = config.repeat_mode
         self._shuffle = config.shuffle
         self._viz_name = viz_name or config.viz_name
+        self._ansi_colors = config.ansi_colors
         self._play_order: list[int] = []
         self._play_order_pos = -1
         self._rng = rng or random.Random()
@@ -299,6 +300,7 @@ class RhythmSlicerApp(App):
             repeat_mode=self._repeat_mode,
             shuffle=self._shuffle,
             viz_name=self._viz_name,
+            ansi_colors=self._ansi_colors,
         )
         save_config(self._config)
 
@@ -1135,7 +1137,7 @@ class RhythmSlicerApp(App):
         prefs = {
             "show_absolute_paths": False,
             "viz": self._viz_name,
-            "ansi_colors": False,
+            "ansi_colors": self._ansi_colors,
         }
         self._viz_prefs = dict(prefs)
         frames = generate_hackscript(

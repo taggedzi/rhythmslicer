@@ -17,6 +17,7 @@ class AppConfig:
     repeat_mode: str = "off"
     shuffle: bool = False
     viz_name: str = "hackscope"
+    ansi_colors: bool = True
 
 
 def get_config_dir(app_name: str = "rhythm-slicer") -> Path:
@@ -56,6 +57,7 @@ def save_config(cfg: AppConfig) -> None:
         "repeat_mode": cfg.repeat_mode,
         "shuffle": cfg.shuffle,
         "viz_name": cfg.viz_name,
+        "ansi_colors": cfg.ansi_colors,
     }
     temp_path.write_text(json.dumps(data, indent=2), encoding="utf-8")
     os.replace(temp_path, path)
@@ -94,6 +96,9 @@ def _config_from_mapping(raw: dict[str, Any]) -> AppConfig:
     viz_name = raw.get("viz_name", "hackscope")
     if not isinstance(viz_name, str) or not viz_name:
         viz_name = "hackscope"
+    ansi_colors = raw.get("ansi_colors", True)
+    if not isinstance(ansi_colors, bool):
+        ansi_colors = False
     return AppConfig(
         last_open_path=last_open_path,
         open_recursive=open_recursive,
@@ -101,4 +106,5 @@ def _config_from_mapping(raw: dict[str, Any]) -> AppConfig:
         repeat_mode=repeat,
         shuffle=shuffle,
         viz_name=viz_name,
+        ansi_colors=ansi_colors,
     )

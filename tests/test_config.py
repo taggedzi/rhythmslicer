@@ -30,6 +30,8 @@ def test_save_load_round_trip(monkeypatch, tmp_path: Path) -> None:
         volume=75,
         repeat_mode="one",
         shuffle=True,
+        viz_name="matrix",
+        ansi_colors=True,
     )
     config.save_config(original)
     loaded = config.load_config()
