@@ -188,6 +188,11 @@ class RhythmSlicerApp(App):
                             yield Button("S:OFF", id="shuffle_toggle")
                 yield Static(id="visualizer")
             yield Static(id="progress")
+            with Horizontal(id="transport_row"):
+                yield Button("<<", id="transport_prev")
+                yield Button("PLAY", id="transport_play_pause")
+                yield Button("STOP", id="transport_stop")
+                yield Button(">>", id="transport_next")
             yield Static(id="status")
 
     async def on_mount(self) -> None:
@@ -219,6 +224,7 @@ class RhythmSlicerApp(App):
             self._set_message("No tracks loaded")
         if self._playlist_list:
             self.set_focus(self._playlist_list)
+        self._update_transport_row()
         self.set_interval(0.1, self._on_tick)
 
     def _set_message(self, text: str, duration: float = 2.0) -> None:
@@ -281,6 +287,18 @@ class RhythmSlicerApp(App):
     def _render_shuffle_label(self) -> str:
         return "S:ON" if self._shuffle else "S:OFF"
 
+    def _render_transport_label(self) -> str:
+        state = (self.player.get_state() or "").lower()
+        return "PAUSE" if "playing" in state else "PLAY"
+
+    def _update_transport_row(self) -> None:
+        try:
+            button = self.query_one("#transport_play_pause", Button)
+        except Exception:
+            return
+        button.label = self._render_transport_label()
+
+
     def _on_tick(self) -> None:
         self._progress_tick += 1
         if self._header:
@@ -289,6 +307,7 @@ class RhythmSlicerApp(App):
             self._visualizer.update(self._render_visualizer())
         if self._progress:
             self._progress.update(self._render_progress())
+        self._update_transport_row()
         if self._status:
             self._status.update(self._render_status())
         if self._progress_tick == 1:
@@ -454,18 +473,20 @@ class RhythmSlicerApp(App):
         self._set_message("Seek unsupported")
 
     def action_toggle_playback(self) -> None:
-        state = self.player.get_state()
-        if state == "playing":
+        state = (self.player.get_state() or "").lower()
+        if "playing" in state:
             self.player.pause()
             self._set_message("Paused")
         else:
             self.player.play()
             self._set_message("Playing")
+        self._update_transport_row()
 
     def action_stop(self) -> None:
         self.player.stop()
         self._playing_index = None
         self._set_message("Stopped")
+        self._update_transport_row()
 
     def action_seek_back(self) -> None:
         self._try_seek(-5000)
@@ -519,6 +540,14 @@ class RhythmSlicerApp(App):
             self.action_cycle_repeat()
         elif event.button.id == "shuffle_toggle":
             self.action_toggle_shuffle()
+        elif event.button.id == "transport_prev":
+            self.action_previous_track()
+        elif event.button.id == "transport_play_pause":
+            self.action_toggle_playback()
+        elif event.button.id == "transport_stop":
+            self.action_stop()
+        elif event.button.id == "transport_next":
+            self.action_next_track()
 
     def action_move_up(self) -> None:
         if not self.playlist or self.playlist.is_empty():

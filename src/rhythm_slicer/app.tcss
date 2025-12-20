@@ -80,6 +80,24 @@ Screen {
     text-wrap: nowrap;
 }
 
+#transport_row {
+    width: 100%;
+    height: 1;
+    align: center middle;
+    background: $panel;
+    color: $accent;
+}
+
+#transport_row Button {
+    height: 1;
+    padding: 0 1;
+    border: none;
+    background: $panel;
+    color: $accent;
+    width: 8;
+    content-align: center middle;
+}
+
 PlaylistPrompt {
     align: center middle;
 }

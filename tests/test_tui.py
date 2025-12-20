@@ -196,6 +196,21 @@ def test_render_repeat_and_shuffle_labels() -> None:
     assert app._render_shuffle_label() == "S:ON"
 
 
+def test_render_transport_label_play_pause() -> None:
+    player = DummyPlayer(state="playing")
+    app = tui.RhythmSlicerApp(player=player, path="song.mp3")
+    assert app._render_transport_label() == "PAUSE"
+    player.state = "paused"
+    assert app._render_transport_label() == "PLAY"
+
+
+def test_transport_play_pause_clicks() -> None:
+    player = DummyPlayer(state="paused")
+    app = tui.RhythmSlicerApp(player=player, path="song.mp3")
+    event = type("Evt", (), {"button": type("Btn", (), {"id": "transport_play_pause"})()})()
+    app.on_button_pressed(event)
+    assert player.play_calls == 1
+
 def test_open_path_calls_set_playlist(tmp_path: Path, monkeypatch) -> None:
     playlist = Playlist([Track(path=Path("one.mp3"), title="one.mp3")])
     target = tmp_path / "music"
