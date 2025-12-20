@@ -4,8 +4,9 @@ from __future__ import annotations
 
 import argparse
 import sys
+import time
 from dataclasses import dataclass
-from typing import Iterable, Optional
+from typing import Callable, Iterable, Optional
 
 from rhythm_slicer.player_vlc import VlcPlayer
 
@@ -35,6 +36,19 @@ def build_parser() -> argparse.ArgumentParser:
 
     play_parser = subparsers.add_parser("play", help="Play a media file")
     play_parser.add_argument("path", help="Path to media file")
+    play_parser.add_argument(
+        "--wait",
+        dest="wait",
+        action="store_true",
+        default=True,
+        help="Wait for playback to finish (default)",
+    )
+    play_parser.add_argument(
+        "--no-wait",
+        dest="wait",
+        action="store_false",
+        help="Exit immediately after starting playback",
+    )
 
     subparsers.add_parser("stop", help="Stop playback")
     subparsers.add_parser("pause", help="Pause playback")
@@ -46,6 +60,40 @@ def build_parser() -> argparse.ArgumentParser:
     subparsers.add_parser("status", help="Show current status")
 
     return parser
+
+
+def _is_terminal_state(state: str) -> bool:
+    return state in {"ended", "stopped", "stop"}
+
+
+def _format_status(player: VlcPlayer, state: str) -> str:
+    position = player.get_position_ms()
+    length = player.get_length_ms()
+    if position is not None and length is not None and length > 0:
+        return f"{state} {position}ms / {length}ms"
+    return f"{state}"
+
+
+def _wait_for_playback(
+    player: VlcPlayer,
+    *,
+    printer: Callable[[str], None],
+    sleep: Callable[[float], None] = time.sleep,
+    now: Callable[[], float] = time.monotonic,
+) -> None:
+    last_print = 0.0
+    try:
+        while True:
+            state = player.get_state()
+            if _is_terminal_state(state):
+                return
+            current_time = now()
+            if current_time - last_print >= 1.0:
+                printer(_format_status(player, state))
+                last_print = current_time
+            sleep(0.1)
+    except KeyboardInterrupt:
+        player.stop()
 
 
 def _execute_command(player: VlcPlayer, args: argparse.Namespace) -> CommandResult:
@@ -87,6 +135,8 @@ def main(argv: Optional[Iterable[str]] = None) -> int:
     if result.message:
         stream = sys.stdout if result.exit_code == 0 else sys.stderr
         print(result.message, file=stream)
+    if args.command == "play" and getattr(args, "wait", False) and result.exit_code == 0:
+        _wait_for_playback(player, printer=print)
     return result.exit_code
 
 
