@@ -53,6 +53,14 @@ def test_parse_play_command() -> None:
     args = parser.parse_args(["play", "song.mp3"])
     assert args.command == "play"
     assert args.path == "song.mp3"
+    assert args.tui is False
+
+
+def test_parse_tui_command() -> None:
+    parser = cli.build_parser()
+    args = parser.parse_args(["tui", "song.mp3"])
+    assert args.command == "tui"
+    assert args.path == "song.mp3"
 
 
 def test_volume_validation() -> None:

@@ -24,6 +24,9 @@ r-slicer play path/to/file.mp3
 # Play a file (waits until playback ends or Ctrl+C)
 r-slicer play path/to/file.mp3
 
+# Launch the Textual TUI
+r-slicer tui path/to/file.mp3
+
 # Pause/Resume/Stop
 r-slicer pause
 r-slicer resume
@@ -37,6 +40,9 @@ r-slicer status
 
 # Exit immediately after starting playback
 r-slicer play --no-wait path/to/file.mp3
+
+# Launch TUI from play command
+r-slicer play --tui path/to/file.mp3
 
 # Module invocation also works
 python -m rhythm_slicer.cli play path/to/file.mp3

@@ -1,0 +1,29 @@
+Screen {
+    layout: vertical;
+    border: round $accent;
+}
+
+#header {
+    height: 1;
+    content-align: left middle;
+}
+
+#main {
+    height: 1fr;
+    width: 100%;
+}
+
+#visualizer {
+    height: 100%;
+    width: 100%;
+    border: round $primary;
+    content-align: center middle;
+}
+
+#status {
+    height: 1;
+    width: 100%;
+    content-align: left middle;
+    text-wrap: nowrap;
+    text-overflow: ellipsis;
+}

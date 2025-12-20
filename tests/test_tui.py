@@ -1,0 +1,95 @@
+"""Tests for TUI helpers and keybindings."""
+
+from __future__ import annotations
+
+from rhythm_slicer import tui
+
+
+class DummyPlayer:
+    def __init__(self, state: str = "playing") -> None:
+        self.state = state
+        self.play_calls = 0
+        self.pause_calls = 0
+        self.stop_calls = 0
+        self.volume = 100
+        self.seeks: list[int] = []
+
+    def get_state(self) -> str:
+        return self.state
+
+    def play(self) -> None:
+        self.play_calls += 1
+        self.state = "playing"
+
+    def pause(self) -> None:
+        self.pause_calls += 1
+        self.state = "paused"
+
+    def stop(self) -> None:
+        self.stop_calls += 1
+        self.state = "stopped"
+
+    def set_volume(self, volume: int) -> None:
+        self.volume = volume
+
+    def get_position_ms(self) -> int:
+        return 1000
+
+    def get_length_ms(self) -> int:
+        return 5000
+
+    def seek_ms(self, delta_ms: int) -> bool:
+        self.seeks.append(delta_ms)
+        return True
+
+
+class DummyPlayerNoSeek(DummyPlayer):
+    seek_ms = None  # type: ignore[assignment]
+
+
+def test_visualizer_bars_deterministic() -> None:
+    bars = tui.visualizer_bars(seed_ms=1000, width=4, height=3)
+    assert bars == [2, 2, 0, 0]
+
+
+def test_render_visualizer() -> None:
+    frame = tui.render_visualizer([2, 2, 0, 0], height=3)
+    assert frame == "    \n##  \n##  "
+
+
+def test_toggle_playback_pauses_when_playing() -> None:
+    player = DummyPlayer(state="playing")
+    app = tui.RhythmSlicerApp(player=player, path="song.mp3")
+    app.action_toggle_playback()
+    assert player.pause_calls == 1
+
+
+def test_toggle_playback_plays_when_paused() -> None:
+    player = DummyPlayer(state="paused")
+    app = tui.RhythmSlicerApp(player=player, path="song.mp3")
+    app.action_toggle_playback()
+    assert player.play_calls == 1
+
+
+def test_seek_forward_calls_player() -> None:
+    player = DummyPlayer()
+    app = tui.RhythmSlicerApp(player=player, path="song.mp3")
+    app.action_seek_forward()
+    assert player.seeks == [5000]
+
+
+def test_seek_shows_message_when_unsupported() -> None:
+    player = DummyPlayerNoSeek()
+    app = tui.RhythmSlicerApp(player=player, path="song.mp3")
+    app.action_seek_forward()
+    assert app._message is not None
+    assert app._message.text == "Seek unsupported"
+
+
+def test_volume_adjustments() -> None:
+    player = DummyPlayer()
+    app = tui.RhythmSlicerApp(player=player, path="song.mp3")
+    app.action_volume_down()
+    assert player.volume == 95
+    app.action_volume_up()
+    assert player.volume == 100

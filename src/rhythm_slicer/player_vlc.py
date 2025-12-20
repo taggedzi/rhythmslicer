@@ -84,3 +84,18 @@ class VlcPlayer:
         if length is None or length < 0:
             return None
         return int(length)
+
+    def seek_ms(self, delta_ms: int) -> bool:
+        """Seek relative to current position, returning success."""
+        try:
+            current = self._player.get_time()
+        except Exception:
+            return False
+        if current is None or current < 0:
+            return False
+        target = max(0, int(current + delta_ms))
+        try:
+            self._player.set_time(target)
+        except Exception:
+            return False
+        return True

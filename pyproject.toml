@@ -13,7 +13,8 @@ authors = [
   { name = "RhythmSlicer Pro Contributors" }
 ]
 dependencies = [
-  "python-vlc>=3.0.0"
+  "python-vlc>=3.0.0",
+  "textual>=0.56.0"
 ]
 
 [project.optional-dependencies]
@@ -26,3 +27,4 @@ r-slicer = "rhythm_slicer.cli:main"
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/rhythm_slicer"]
+include = ["src/rhythm_slicer/app.tcss"]

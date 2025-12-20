@@ -18,6 +18,7 @@ class FakeMediaPlayer:
     def __init__(self) -> None:
         self.media = None
         self.volume = None
+        self.time = 0
 
     def set_media(self, media: str) -> None:
         self.media = media
@@ -38,10 +39,13 @@ class FakeMediaPlayer:
         return FakeState("Playing")
 
     def get_time(self) -> int:
-        return 1234
+        return 1234 if self.time == 0 else self.time
 
     def get_length(self) -> int:
         return 5678
+
+    def set_time(self, value: int) -> None:
+        self.time = value
 
 
 class FakeInstance:
@@ -70,6 +74,7 @@ def test_player_state_and_positions(monkeypatch: pytest.MonkeyPatch) -> None:
     assert player.get_state() == "playing"
     assert player.get_position_ms() == 1234
     assert player.get_length_ms() == 5678
+    assert player.seek_ms(5000) is True
 
 
 def test_missing_vlc_raises_error(monkeypatch: pytest.MonkeyPatch) -> None:
