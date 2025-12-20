@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+import asyncio
 import math
 import random
 from pathlib import Path
@@ -134,6 +135,11 @@ class FramePlayer:
             self.stop()
             return
         self._app._show_frame(frame)
+        try:
+            asyncio.get_running_loop()
+        except RuntimeError:
+            self.stop()
+            return
         delay = max(0.01, frame.hold_ms / 1000.0)
         self._timer = self._app.set_timer(delay, self._advance)
 
