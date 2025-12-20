@@ -302,50 +302,6 @@ def _truth_or_unknown(ctx: VizContext, value: str | None) -> str:
     return fmt_sim(ctx, "Unknown")
 
 
-def _truth_footer(ctx: VizContext, meta: dict, width: int) -> str:
-    title = _meta_value(meta, "title")
-    artist = _meta_value(meta, "artist")
-    codec = _meta_value(meta, "codec")
-    bitrate_kbps = _meta_int(meta, "bitrate_kbps")
-    sample_rate = _meta_int(meta, "sample_rate_hz")
-    channels = _meta_int(meta, "channels")
-
-    title_text = _truth_or_unknown(ctx, title)
-    artist_text = _truth_or_unknown(ctx, artist)
-    codec_text = _truth_or_unknown(ctx, codec)
-    if bitrate_kbps is not None:
-        bitrate_text = fmt_truth(ctx, f"{bitrate_kbps}kbps")
-    else:
-        bitrate_text = fmt_sim(ctx, "Unknown")
-    if sample_rate is not None:
-        sample_text = fmt_truth(ctx, f"{sample_rate}Hz")
-    else:
-        sample_text = fmt_sim(ctx, "Unknown")
-    if channels is not None:
-        channels_text = fmt_truth(ctx, f"{channels}ch")
-    else:
-        channels_text = fmt_sim(ctx, "Unknown")
-
-    line = (
-        f"{fmt_label(ctx, 'INFO')}: {title_text} - {artist_text} | "
-        f"{codec_text} {bitrate_text} | {sample_text} {channels_text}"
-    )
-    return _pad_line(line, width)
-
-
-def _apply_truth_footer(
-    frame: str, footer: str, width: int, height: int
-) -> str:
-    lines = frame.splitlines()
-    if not lines:
-        lines = [""]
-    while len(lines) < height:
-        lines.append("")
-    lines = lines[:height]
-    lines[-1] = _pad_line(footer, width)
-    return "\n".join(lines)
-
-
 def _allocate_phases(
     total_frames: int,
     phases: list[tuple[str, float]],
@@ -1188,8 +1144,6 @@ def generate_frames(ctx: VizContext) -> Iterator[str]:
                 idle_i,
                 use_ansi=use_ansi,
             )
-        footer = _truth_footer(ctx, meta, width)
-        frame = _apply_truth_footer(frame, footer, width, height)
         if bool(ctx.prefs.get("hackscope_ambient", True)):
             ambient = render_ambient(
                 ctx,

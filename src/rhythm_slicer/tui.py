@@ -322,24 +322,9 @@ class RhythmSlicerApp(App):
         return None
 
     def _render_status(self) -> str:
-        state = _display_state(self.player.get_state())
-        position = _format_time_ms(self.player.get_position_ms())
-        length = _format_time_ms(self.player.get_length_ms())
-        timing = f"{position or '--:--'} / {length or '--:--'}"
-        track_info = "0/0"
-        title = "No tracks"
-        if self.playlist and not self.playlist.is_empty():
-            track = self.playlist.current()
-            if track:
-                track_info = f"{self.playlist.index + 1}/{len(self.playlist.tracks)}"
-                title = track.title
-        hotkeys = "Keys: Space S ←/→ N/P Enter D Q + - R H Ctrl+S Ctrl+O"
         message = self._pop_message()
         track_count = len(self.playlist.tracks) if self.playlist else 0
-        base = (
-            f"State: {state} | Track: {track_info} {title} | "
-            f"Time: {timing} | Vol: {self._volume} | {hotkeys} | Tracks: {track_count}"
-        )
+        base = f"Tracks: {track_count}"
         line = f"{message} | {base}" if message else base
         if self._status:
             max_width = max(1, self._status.size.width)

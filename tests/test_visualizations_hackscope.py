@@ -95,16 +95,10 @@ def test_hackscope_truth_highlight_ansi() -> None:
         viewport_w=50,
         viewport_h=10,
         prefs={"ansi_colors": True, "fps": 20.0},
-        meta={
-            "title": "Song",
-            "artist": "Artist",
-            "codec": "mp3",
-            "bitrate_kbps": 320,
-        },
+        meta={"title": "Song", "artist": "Artist"},
         seed=123,
     )
-    frame = next(generate_frames(ctx))
-    assert "\x1b[93m" in frame
+    assert "\x1b[93m" in hackscope.fmt_truth(ctx, "Song")
 
 
 def test_hackscope_truth_highlight_no_ansi() -> None:
@@ -113,16 +107,10 @@ def test_hackscope_truth_highlight_no_ansi() -> None:
         viewport_w=50,
         viewport_h=10,
         prefs={"ansi_colors": False, "fps": 20.0},
-        meta={
-            "title": "Song",
-            "artist": "Artist",
-            "codec": "mp3",
-            "bitrate_kbps": 320,
-        },
+        meta={"title": "Song", "artist": "Artist"},
         seed=123,
     )
-    frame = next(generate_frames(ctx))
-    assert "[=Song=]" in frame
+    assert hackscope.fmt_truth(ctx, "Song") == "[=Song=]"
 
 
 def test_hackscope_resume_changes_first_frame() -> None:
