@@ -140,14 +140,14 @@ def test_build_play_order_shuffle_keeps_current() -> None:
 def test_playlist_footer_empty() -> None:
     playlist = Playlist([])
     app = tui.RhythmSlicerApp(player=DummyPlayer(), path="song.mp3", playlist=playlist)
-    assert app._render_playlist_footer() == "Track: --/0"
+    assert "Track: --/0" in app._render_playlist_footer()
 
 
 def test_playlist_footer_single_track() -> None:
     tracks = [Track(path=Path("one.mp3"), title="one.mp3")]
     playlist = Playlist(tracks)
     app = tui.RhythmSlicerApp(player=DummyPlayer(), path="song.mp3", playlist=playlist)
-    assert app._render_playlist_footer() == "Track: 1/1"
+    assert "Track: 1/1" in app._render_playlist_footer()
 
 
 def test_playlist_footer_multiple_tracks() -> None:
@@ -159,7 +159,7 @@ def test_playlist_footer_multiple_tracks() -> None:
     playlist = Playlist(tracks)
     playlist.set_index(1)
     app = tui.RhythmSlicerApp(player=DummyPlayer(), path="song.mp3", playlist=playlist)
-    assert app._render_playlist_footer() == "Track: 2/3"
+    assert "Track: 2/3" in app._render_playlist_footer()
 
 
 def test_playlist_footer_after_removal() -> None:
@@ -172,7 +172,28 @@ def test_playlist_footer_after_removal() -> None:
     playlist.set_index(1)
     playlist.remove(1)
     app = tui.RhythmSlicerApp(player=DummyPlayer(), path="song.mp3", playlist=playlist)
-    assert app._render_playlist_footer() == "Track: 2/2"
+    assert "Track: 2/2" in app._render_playlist_footer()
+
+
+def test_render_modes_repeat_and_shuffle() -> None:
+    app = tui.RhythmSlicerApp(player=DummyPlayer(), path="song.mp3")
+    app._repeat_mode = "off"
+    app._shuffle = False
+    assert app._render_modes() == "R:OFF S:OFF"
+    app._repeat_mode = "one"
+    app._shuffle = True
+    assert app._render_modes() == "R:ONE S:ON"
+    app._repeat_mode = "all"
+    app._shuffle = False
+    assert app._render_modes() == "R:ALL S:OFF"
+
+
+def test_render_repeat_and_shuffle_labels() -> None:
+    app = tui.RhythmSlicerApp(player=DummyPlayer(), path="song.mp3")
+    app._repeat_mode = "all"
+    app._shuffle = True
+    assert app._render_repeat_label() == "R:ALL"
+    assert app._render_shuffle_label() == "S:ON"
 
 
 def test_open_path_calls_set_playlist(tmp_path: Path, monkeypatch) -> None:

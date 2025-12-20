@@ -14,16 +14,48 @@ Screen {
     width: 100%;
 }
 
-#playlist_list {
+#playlist_pane {
     width: 35;
     min-width: 24;
     height: 1fr;
-    border: round $secondary;
+    border: round $primary;
     background: $panel;
-    padding: 0 0 0 1;
+    padding: 0 1;
+}
+
+#playlist_list {
+    width: 100%;
+    height: 1fr;
     overflow-y: auto;
     content-align: left top;
     text-wrap: nowrap;
+}
+
+#playlist_footer {
+    width: 100%;
+    height: 1;
+    content-align: left middle;
+    background: $panel;
+    color: $accent;
+    text-wrap: nowrap;
+}
+
+#playlist_footer_track {
+    width: 1fr;
+    min-width: 12;
+    content-align: left middle;
+    text-wrap: nowrap;
+    overflow-x: hidden;
+}
+
+#repeat_toggle,
+#shuffle_toggle {
+    height: 1;
+    padding: 0 1;
+    border: none;
+    background: $panel;
+    color: $accent;
+    min-width: 5;
 }
 
 #visualizer {
