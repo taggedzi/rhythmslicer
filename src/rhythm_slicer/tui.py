@@ -241,6 +241,8 @@ class RhythmSlicerApp(App):
             self._progress.update(self._render_progress())
         if self._status:
             self._status.update(self._render_status())
+        if self._progress_tick == 1:
+            self._update_playlist_view()
         state = self.player.get_state()
         if state == "ended" and self._last_state != "ended":
             self._advance_track(auto=True)
