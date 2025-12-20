@@ -15,12 +15,18 @@ Screen {
 }
 
 #playlist_pane {
-    width: 35;
+    width: 1fr;
     min-width: 24;
     height: 1fr;
     border: round $primary;
     background: $panel;
     padding: 0 1;
+}
+
+#visuals_pane {
+    width: 1fr;
+    min-width: 24;
+    height: 1fr;
 }
 
 #playlist_list {

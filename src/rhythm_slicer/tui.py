@@ -186,7 +186,8 @@ class RhythmSlicerApp(App):
                             yield Static(id="playlist_footer_track")
                             yield Button("R:OFF", id="repeat_toggle")
                             yield Button("S:OFF", id="shuffle_toggle")
-                yield Static(id="visualizer")
+                with Container(id="visuals_pane"):
+                    yield Static(id="visualizer")
             yield Static(id="progress")
             with Horizontal(id="transport_row"):
                 yield Button("<<", id="transport_prev")
