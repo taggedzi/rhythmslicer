@@ -45,6 +45,11 @@ Screen {
     background: $panelB;
 }
 
+#visuals_stack {
+    width: 1fr;
+    height: 1fr;
+}
+
 #playlist_list {
     width: 100%;
     height: 1fr;
@@ -90,6 +95,16 @@ Screen {
     text-style: bold;
     content-align: center middle;
     background: $panelB;
+}
+
+#visualizer_hud {
+    height: 4;
+    width: 1fr;
+    padding: 0 1;
+    text-wrap: nowrap;
+    content-align: left top;
+    background: $panelA;
+    color: $text_dim;
 }
 
 #status {

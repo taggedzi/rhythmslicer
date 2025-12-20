@@ -146,6 +146,11 @@ class FramePlayer:
         delay = max(0.01, frame.hold_ms / 1000.0)
         self._timer = self._app.set_timer(delay, self._advance)
 
+
+class VisualizerHud(Static):
+    """Compact HUD for the visualizer pane."""
+
+
 @dataclass
 class TuiMessage:
     text: str
@@ -220,6 +225,7 @@ class RhythmSlicerApp(App):
         self._playing_index: Optional[int] = None
         self._header: Optional[Static] = None
         self._visualizer: Optional[Static] = None
+        self._visualizer_hud: Optional[Static] = None
         self._playlist_list: Optional[Static] = None
         self._progress: Optional[Static] = None
         self._status: Optional[Static] = None
@@ -251,13 +257,16 @@ class RhythmSlicerApp(App):
                             id="transport_row",
                         )
                 with Container(id="visuals_pane"):
-                    yield Static(id="visualizer")
+                    with Vertical(id="visuals_stack"):
+                        yield Static(id="visualizer")
+                        yield VisualizerHud(id="visualizer_hud")
             yield Static(id="progress")
             yield Static(id="status")
 
     async def on_mount(self) -> None:
         self._header = self.query_one("#header", Static)
         self._visualizer = self.query_one("#visualizer", Static)
+        self._visualizer_hud = self.query_one("#visualizer_hud", Static)
         self._playlist_list = self.query_one("#playlist_list", Static)
         self._playlist_list.can_focus = True
         playlist_pane = self.query_one("#playlist_pane", Container)
@@ -266,6 +275,7 @@ class RhythmSlicerApp(App):
         self._status = self.query_one("#status", Static)
         if self._visualizer:
             self._visualizer.border_title = "Visualizer"
+        self._update_visualizer_hud()
         self._update_visualizer_viewport()
         self.player.set_volume(self._volume)
         if self.playlist is None:
@@ -391,6 +401,7 @@ class RhythmSlicerApp(App):
         self._update_transport_row()
         if self._status:
             self._status.update(self._render_status())
+        self._update_visualizer_hud()
         if self._progress_tick == 1:
             self._update_playlist_view()
         if self.player.consume_end_reached():
@@ -419,6 +430,70 @@ class RhythmSlicerApp(App):
         pad = max(0, (width - len(message)) // 2)
         line = (" " * pad + message).ljust(width)
         return "\n".join(line for _ in range(height))
+
+    def _render_visualizer_hud(self) -> str:
+        width, height = self._visualizer_hud_size()
+        if width <= 0 or height <= 0:
+            return ""
+        title = "No track"
+        artist = "--"
+        if self.playlist and not self.playlist.is_empty():
+            track = self.playlist.current()
+            if track:
+                meta = get_track_meta(track.path)
+                if meta.title:
+                    title = meta.title
+                else:
+                    title = track.title
+                if meta.artist:
+                    artist = meta.artist
+        state = _display_state(self.player.get_state())
+        position = _format_time_ms(self.player.get_position_ms())
+        length = _format_time_ms(self.player.get_length_ms())
+        timing = f"{position or '--:--'} / {length or '--:--'}"
+        left_lines = [f"TITLE: {title}", f"ARTIST: {artist}"]
+        right_lines = [f"STATE: {state}", f"TIME: {timing}", f"VOL: {self._volume}"]
+        gap = 2
+        min_col = 18
+        use_two_cols = width >= (min_col * 2 + gap)
+        if use_two_cols:
+            left_width = max(min_col, (width - gap) // 2)
+            right_width = max(min_col, width - gap - left_width)
+            rows = max(height, len(left_lines), len(right_lines))
+            left_lines = left_lines + [""] * max(0, rows - len(left_lines))
+            right_lines = right_lines + [""] * max(0, rows - len(right_lines))
+            lines = []
+            for idx in range(rows):
+                left = _truncate_line(left_lines[idx], left_width).ljust(left_width)
+                right = _truncate_line(right_lines[idx], right_width).ljust(right_width)
+                lines.append(f"{left}{' ' * gap}{right}")
+        else:
+            lines = [
+                f"TITLE: {title}",
+                f"ARTIST: {artist}",
+                f"STATE: {state}",
+                f"TIME: {timing} | VOL: {self._volume}",
+            ]
+        if len(lines) < height:
+            lines.extend([""] * (height - len(lines)))
+        if len(lines) > height:
+            lines = lines[:height]
+        return "\n".join(_truncate_line(line, width).ljust(width) for line in lines)
+
+    def _visualizer_hud_size(self) -> tuple[int, int]:
+        if not self._visualizer_hud:
+            return (1, 1)
+        size = (
+            getattr(self._visualizer_hud, "content_size", None)
+            or self._visualizer_hud.size
+        )
+        width = max(1, getattr(size, "width", 1))
+        height = max(1, getattr(size, "height", 1))
+        return (width, height)
+
+    def _update_visualizer_hud(self) -> None:
+        if self._visualizer_hud:
+            self._visualizer_hud.update(self._render_visualizer_hud())
 
     def _render_progress(self) -> str:
         if not self._progress:
@@ -498,6 +573,7 @@ class RhythmSlicerApp(App):
             playback_pos_ms=self._get_playback_position_ms(),
             playback_state=self._get_playback_state(),
         )
+        self._update_visualizer_hud()
         return True
 
     def _advance_track(self, auto: bool = False) -> None:
@@ -626,32 +702,38 @@ class RhythmSlicerApp(App):
             playback_pos_ms=pos_ms,
             playback_state=desired_state,
         )
+        self._update_visualizer_hud()
 
     def action_stop(self) -> None:
         self.player.stop()
         self._playing_index = None
         self._stop_hackscript()
         self._set_message("Stopped")
+        self._update_visualizer_hud()
 
     def action_seek_back(self) -> None:
         if self._try_seek(-5000):
             self._schedule_viz_restart()
+        self._update_visualizer_hud()
 
     def action_seek_forward(self) -> None:
         if self._try_seek(5000):
             self._schedule_viz_restart()
+        self._update_visualizer_hud()
 
     def action_volume_up(self) -> None:
         self._volume = min(100, self._volume + 5)
         self.player.set_volume(self._volume)
         self._set_message(f"Volume {self._volume}")
         self._save_config()
+        self._update_visualizer_hud()
 
     def action_volume_down(self) -> None:
         self._volume = max(0, self._volume - 5)
         self.player.set_volume(self._volume)
         self._set_message(f"Volume {self._volume}")
         self._save_config()
+        self._update_visualizer_hud()
 
     def action_next_track(self) -> None:
         if not self.playlist or self.playlist.is_empty():
@@ -959,6 +1041,7 @@ class RhythmSlicerApp(App):
         del event
         self._update_visualizer_viewport()
         self._update_playlist_view()
+        self._update_visualizer_hud()
         if self._current_track_path:
             self._restart_hackscript_from_player()
         elif self._visualizer and not self._frame_player.is_running:
