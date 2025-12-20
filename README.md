@@ -48,6 +48,11 @@ r-slicer play --tui path/to/file.mp3
 python -m rhythm_slicer.cli play path/to/file.mp3
 ```
 
+## Visualizations (preview)
+
+The `--viz <name>` flag selects a built-in visualization by name. Arbitrary
+Python file execution is not supported.
+
 ## Platform prerequisites
 
 - VLC installed and available on your system.
