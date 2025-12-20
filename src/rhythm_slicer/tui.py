@@ -27,6 +27,7 @@ except Exception as exc:  # pragma: no cover - depends on environment
 
 from rhythm_slicer.config import AppConfig, load_config, save_config
 from rhythm_slicer.hackscript import HackFrame, generate as generate_hackscript
+from rhythm_slicer.visualizations.ansi import sanitize_ansi_sgr
 from rhythm_slicer.metadata import format_display_title, get_track_meta
 from rhythm_slicer.player_vlc import VlcPlayer
 from rhythm_slicer.playlist import Playlist, Track, load_from_input, SUPPORTED_EXTENSIONS
@@ -227,6 +228,7 @@ class RhythmSlicerApp(App):
         self._viewport_width = 1
         self._viewport_height = 1
         self._last_visualizer_text: Optional[str] = None
+        self._viz_prefs: dict[str, object] = {}
 
     def compose(self) -> ComposeResult:
         with Vertical():
@@ -1089,6 +1091,24 @@ class RhythmSlicerApp(App):
             clipped.append(line.ljust(width))
         return "\n".join(clipped)
 
+    def _render_ansi_frame(self, text: str, width: int, height: int) -> Text:
+        sanitized = sanitize_ansi_sgr(text)
+        lines = sanitized.splitlines()
+        if not lines:
+            lines = [""]
+        rendered = Text()
+        for idx in range(height):
+            if idx > 0:
+                rendered.append("\n")
+            line = lines[idx] if idx < len(lines) else ""
+            line_text = Text.from_ansi(line)
+            if line_text.cell_len > width:
+                line_text.truncate(width)
+            if line_text.cell_len < width:
+                line_text.append(" " * (width - line_text.cell_len))
+            rendered.append_text(line_text)
+        return rendered
+
     def _show_frame(self, frame: HackFrame) -> None:
         if not self._visualizer:
             return
@@ -1098,15 +1118,26 @@ class RhythmSlicerApp(App):
             self._last_visualizer_text = text
             self._visualizer.update(text)
             return
-        clipped = self._clip_frame_text(frame.text, width, height)
-        self._last_visualizer_text = clipped
-        self._visualizer.update(clipped)
+        use_ansi = bool(self._viz_prefs.get("ansi_colors", False))
+        if use_ansi:
+            rendered = self._render_ansi_frame(frame.text, width, height)
+            self._last_visualizer_text = rendered.plain
+            self._visualizer.update(rendered)
+        else:
+            clipped = self._clip_frame_text(frame.text, width, height)
+            self._last_visualizer_text = clipped
+            self._visualizer.update(clipped)
 
     def _start_hackscript(self, track_path: Path) -> None:
         self._update_visualizer_viewport()
         resolved = track_path.expanduser().resolve()
         self._current_track_path = resolved
-        prefs = {"show_absolute_paths": False, "viz": self._viz_name}
+        prefs = {
+            "show_absolute_paths": False,
+            "viz": self._viz_name,
+            "ansi_colors": False,
+        }
+        self._viz_prefs = dict(prefs)
         frames = generate_hackscript(
             resolved,
             (self._viewport_width, self._viewport_height),
@@ -1124,6 +1155,7 @@ class RhythmSlicerApp(App):
         self._frame_player.stop()
         self._current_track_path = None
         self._last_visualizer_text = None
+        self._viz_prefs = {}
         if self._visualizer:
             self._visualizer.update(self._render_visualizer())
 
