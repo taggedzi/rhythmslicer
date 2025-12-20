@@ -50,3 +50,6 @@ Thumbs.db
 
 # Ruff
 .ruff_cache/
+
+# playlist files
+*.m3u8

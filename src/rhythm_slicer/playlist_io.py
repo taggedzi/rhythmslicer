@@ -4,6 +4,8 @@ from __future__ import annotations
 
 from pathlib import Path
 
+from typing import Literal
+
 from rhythm_slicer.playlist import Playlist, Track, SUPPORTED_EXTENSIONS
 
 
@@ -11,17 +13,25 @@ def _is_supported(path: Path) -> bool:
     return path.suffix.lower() in SUPPORTED_EXTENSIONS
 
 
-def save_m3u8(playlist: Playlist, dest: Path) -> None:
+def save_m3u8(
+    playlist: Playlist, dest: Path, mode: Literal["relative", "absolute", "auto"] = "relative"
+) -> None:
     """Save playlist as UTF-8 M3U8."""
     dest.parent.mkdir(parents=True, exist_ok=True)
     lines = ["#EXTM3U"]
     for track in playlist.tracks:
         path = track.path
+        if mode == "absolute":
+            lines.append(str(path))
+            continue
         try:
             rel = path.relative_to(dest.parent)
         except ValueError:
             rel = None
-        lines.append(str(rel if rel is not None else path))
+        if rel is not None:
+            lines.append(str(rel))
+        else:
+            lines.append(str(path))
     dest.write_text("\n".join(lines) + "\n", encoding="utf-8")
 
 

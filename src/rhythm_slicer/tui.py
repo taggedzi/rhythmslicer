@@ -705,15 +705,21 @@ class RhythmSlicerApp(App):
     async def _save_playlist_flow(self) -> None:
         default_path = self._default_save_path()
         result = await self.push_screen_wait(
-            PlaylistPrompt("Save Playlist", str(default_path))
+            PlaylistPrompt(
+                "Save Playlist",
+                str(default_path),
+                show_absolute_toggle=True,
+                absolute_default=False,
+            )
         )
         if not result:
             return
-        dest = Path(result).expanduser()
+        dest_str, absolute = _parse_prompt_result(result)
+        dest = Path(dest_str).expanduser()
         try:
             from rhythm_slicer.playlist_io import save_m3u8
 
-            save_m3u8(self.playlist, dest)
+            save_m3u8(self.playlist, dest, mode="absolute" if absolute else "auto")
         except Exception as exc:
             self._set_message(f"Save failed: {exc}")
             return
@@ -725,7 +731,8 @@ class RhythmSlicerApp(App):
         result = await self.push_screen_wait(PlaylistPrompt("Load Playlist", default))
         if not result:
             return
-        path = Path(result).expanduser()
+        path_str, _ = _parse_prompt_result(result)
+        path = Path(path_str).expanduser()
         try:
             new_playlist = load_from_input(path)
         except Exception as exc:
@@ -746,15 +753,32 @@ class RhythmSlicerApp(App):
 class PlaylistPrompt(ModalScreen[Optional[str]]):
     """Modal prompt for playlist paths."""
 
-    def __init__(self, title: str, default_path: str) -> None:
+    def __init__(
+        self,
+        title: str,
+        default_path: str,
+        *,
+        show_absolute_toggle: bool = False,
+        absolute_default: bool = False,
+    ) -> None:
         super().__init__()
         self._title = title
         self._default_path = default_path
+        self._show_absolute_toggle = show_absolute_toggle
+        self._absolute_default = absolute_default
 
     def compose(self) -> ComposeResult:
         with Container(id="playlist_prompt"):
             yield Static(self._title, id="prompt_title")
             yield Input(value=self._default_path, id="prompt_input")
+            if self._show_absolute_toggle:
+                toggle = Button(
+                    "Save absolute paths: Off",
+                    id="prompt_absolute",
+                )
+                if self._absolute_default:
+                    toggle.label = "Save absolute paths: On"
+                yield toggle
             with Horizontal(id="prompt_buttons"):
                 yield Button("OK", id="prompt_ok")
                 yield Button("Cancel", id="prompt_cancel")
@@ -763,9 +787,26 @@ class PlaylistPrompt(ModalScreen[Optional[str]]):
         self.query_one("#prompt_input", Input).focus()
 
     def on_button_pressed(self, event: Button.Pressed) -> None:
+        if event.button.id == "prompt_absolute":
+            label = event.button.label
+            event.button.label = (
+                "Save absolute paths: Off"
+                if "On" in label
+                else "Save absolute paths: On"
+            )
+            return
         if event.button.id == "prompt_ok":
             value = self.query_one("#prompt_input", Input).value.strip()
-            self.dismiss(value or None)
+            absolute = False
+            toggle = self.query("#prompt_absolute")
+            if toggle:
+                button = toggle.first()
+                if button and isinstance(button, Button):
+                    absolute = "On" in button.label
+            if value:
+                self.dismiss(f"{value}::abs={int(absolute)}")
+            else:
+                self.dismiss(None)
         else:
             self.dismiss(None)
 
@@ -774,7 +815,16 @@ class PlaylistPrompt(ModalScreen[Optional[str]]):
             self.dismiss(None)
         if event.key == "enter":
             value = self.query_one("#prompt_input", Input).value.strip()
-            self.dismiss(value or None)
+            absolute = False
+            toggle = self.query("#prompt_absolute")
+            if toggle:
+                button = toggle.first()
+                if button and isinstance(button, Button):
+                    absolute = "On" in button.label
+            if value:
+                self.dismiss(f"{value}::abs={int(absolute)}")
+            else:
+                self.dismiss(None)
 
 
 def _truncate_line(text: str, max_width: int) -> str:
@@ -785,6 +835,13 @@ def _truncate_line(text: str, max_width: int) -> str:
     if max_width <= 1:
         return text[:max_width]
     return text[: max_width - 1] + "…"
+
+
+def _parse_prompt_result(value: str) -> tuple[str, bool]:
+    if "::abs=" not in value:
+        return value, False
+    path, raw = value.rsplit("::abs=", 1)
+    return path, raw.strip() == "1"
 
 
 def run_tui(path: str, player: VlcPlayer) -> int:

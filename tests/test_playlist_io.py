@@ -44,3 +44,34 @@ def test_load_ignores_comments_and_missing(tmp_path: Path) -> None:
     )
     playlist = load_m3u_any(m3u)
     assert [track.path for track in playlist.tracks] == [existing]
+
+
+def test_save_absolute_paths(tmp_path: Path) -> None:
+    track = tmp_path / "song.mp3"
+    track.write_text("x", encoding="utf-8")
+    playlist = Playlist([Track(path=track, title="song.mp3")])
+    dest = tmp_path / "list.m3u8"
+    save_m3u8(playlist, dest, mode="absolute")
+    lines = dest.read_text(encoding="utf-8").splitlines()
+    assert Path(lines[1]).is_absolute()
+
+
+def test_save_relative_fallback_for_different_root(tmp_path: Path) -> None:
+    foreign = Path("Z:/music/track.mp3")
+    if foreign.exists() or not foreign.is_absolute():
+        return
+    playlist = Playlist([Track(path=foreign, title="track.mp3")])
+    dest = tmp_path / "list.m3u8"
+    save_m3u8(playlist, dest, mode="relative")
+    lines = dest.read_text(encoding="utf-8").splitlines()
+    assert Path(lines[1]).is_absolute()
+
+
+def test_round_trip_preserves_paths(tmp_path: Path) -> None:
+    track = tmp_path / "song.mp3"
+    track.write_text("x", encoding="utf-8")
+    playlist = Playlist([Track(path=track, title="song.mp3")])
+    dest = tmp_path / "list.m3u8"
+    save_m3u8(playlist, dest, mode="absolute")
+    loaded = load_m3u_any(dest)
+    assert [track.path for track in loaded.tracks] == [track]

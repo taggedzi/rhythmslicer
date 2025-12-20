@@ -76,6 +76,11 @@ def build_parser() -> argparse.ArgumentParser:
     save_parser = playlist_sub.add_parser("save", help="Save playlist to M3U8")
     save_parser.add_argument("dest", help="Destination .m3u8 path")
     save_parser.add_argument("--from", dest="from_input", required=True)
+    save_parser.add_argument(
+        "--absolute",
+        action="store_true",
+        help="Save with absolute paths",
+    )
 
     show_parser = playlist_sub.add_parser("show", help="Show resolved tracks")
     show_parser.add_argument("--from", dest="from_input", required=True)
@@ -145,7 +150,8 @@ def _execute_command(player: VlcPlayer, args: argparse.Namespace) -> CommandResu
         if args.playlist_cmd == "save":
             if playlist.is_empty():
                 return CommandResult(1, "No tracks to save")
-            save_m3u8(playlist, Path(args.dest))
+            mode = "absolute" if args.absolute else "auto"
+            save_m3u8(playlist, Path(args.dest), mode=mode)
             return CommandResult(0, f"Saved {len(playlist.tracks)} tracks to {args.dest}")
         if args.playlist_cmd == "show":
             lines = [

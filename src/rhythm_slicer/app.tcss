@@ -75,3 +75,9 @@ PlaylistPrompt {
     height: 1;
     align: right middle;
 }
+
+#prompt_absolute {
+    width: 100%;
+    height: 1;
+    content-align: left middle;
+}
