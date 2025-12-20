@@ -7,7 +7,7 @@ import math
 import random
 from pathlib import Path
 import time
-from typing import Callable, Optional
+from typing import Callable, Iterator, Optional
 
 try:
     from textual.app import App, ComposeResult
@@ -23,6 +23,7 @@ except Exception as exc:  # pragma: no cover - depends on environment
     ) from exc
 
 from rhythm_slicer.config import AppConfig, load_config, save_config
+from rhythm_slicer.hackscript import HackFrame, generate as generate_hackscript
 from rhythm_slicer.metadata import format_display_title, get_track_meta
 from rhythm_slicer.player_vlc import VlcPlayer
 from rhythm_slicer.playlist import Playlist, Track, load_from_input, SUPPORTED_EXTENSIONS
@@ -100,6 +101,42 @@ def build_play_order(
         position = 0
     return order, position
 
+
+class FramePlayer:
+    """Non-blocking HackScript frame player for the visualizer."""
+
+    def __init__(self, app: "RhythmSlicerApp") -> None:
+        self._app = app
+        self._frames: Optional[Iterator[HackFrame]] = None
+        self._timer = None
+
+    def start(self, frames: Iterator[HackFrame]) -> None:
+        self.stop()
+        self._frames = frames
+        self._advance()
+
+    def stop(self) -> None:
+        if self._timer is not None:
+            self._timer.stop()
+            self._timer = None
+        self._frames = None
+
+    @property
+    def is_running(self) -> bool:
+        return self._frames is not None
+
+    def _advance(self) -> None:
+        if self._frames is None:
+            return
+        try:
+            frame = next(self._frames)
+        except StopIteration:
+            self.stop()
+            return
+        self._app._show_frame(frame)
+        delay = max(0.01, frame.hold_ms / 1000.0)
+        self._timer = self._app.set_timer(delay, self._advance)
+
 @dataclass
 class TuiMessage:
     text: str
@@ -174,6 +211,11 @@ class RhythmSlicerApp(App):
         self._progress: Optional[Static] = None
         self._status: Optional[Static] = None
         self._progress_tick = 0
+        self._frame_player = FramePlayer(self)
+        self._current_track_path: Optional[Path] = None
+        self._viewport_width = 1
+        self._viewport_height = 1
+        self._last_visualizer_text: Optional[str] = None
 
     def compose(self) -> ComposeResult:
         with Vertical():
@@ -209,6 +251,7 @@ class RhythmSlicerApp(App):
         self._status = self.query_one("#status", Static)
         if self._visualizer:
             self._visualizer.border_title = "Visualizer"
+        self._update_visualizer_viewport()
         self.player.set_volume(self._volume)
         if self.playlist is None:
             if not self._explicit_path and self._last_open_path:
@@ -320,7 +363,11 @@ class RhythmSlicerApp(App):
         self._progress_tick += 1
         if self._header:
             self._header.update(self._render_header())
-        if self._visualizer:
+        if (
+            self._visualizer
+            and not self._frame_player.is_running
+            and self._last_visualizer_text is None
+        ):
             self._visualizer.update(self._render_visualizer())
         if self._progress:
             self._progress.update(self._render_progress())
@@ -341,18 +388,20 @@ class RhythmSlicerApp(App):
         return f"RhythmSlicer Pro | {title}"
 
     def _render_visualizer(self) -> str:
-        size = getattr(self._visualizer, "content_size", None) or self._visualizer.size
-        width = max(1, size.width)
-        height = max(1, size.height)
+        width, height = self._visualizer_viewport()
+        if width <= 0 or height <= 0:
+            return ""
+        if width <= 2 or height <= 1:
+            return self._tiny_visualizer_text(width, height)
         if not self.playlist or self.playlist.is_empty():
             message = "No tracks loaded"
             pad = max(0, (width - len(message)) // 2)
             line = (" " * pad + message).ljust(width)
             return "\n".join(line for _ in range(height))
-        position = self.player.get_position_ms()
-        seed_ms = position if position is not None else int(time.time() * 1000)
-        bars = visualizer_bars(seed_ms, width, height)
-        return render_visualizer(bars, height)
+        message = "Visualizer idle"
+        pad = max(0, (width - len(message)) // 2)
+        line = (" " * pad + message).ljust(width)
+        return "\n".join(line for _ in range(height))
 
     def _render_progress(self) -> str:
         if not self._progress:
@@ -427,6 +476,7 @@ class RhythmSlicerApp(App):
             return False
         self._playing_index = self.playlist.index
         self._sync_selection()
+        self._start_hackscript(track.path)
         return True
 
     def _advance_track(self, auto: bool = False) -> None:
@@ -440,6 +490,7 @@ class RhythmSlicerApp(App):
         if next_index is None:
             if auto and self._repeat_mode == "off":
                 self.player.stop()
+                self._stop_hackscript()
             self._set_message("End of playlist")
             return
         self._set_selected(next_index)
@@ -458,6 +509,7 @@ class RhythmSlicerApp(App):
                 return
             attempts -= 1
         self.player.stop()
+        self._stop_hackscript()
 
     def _try_seek(self, delta_ms: int) -> None:
         seek = getattr(self.player, "seek_ms", None)
@@ -499,6 +551,7 @@ class RhythmSlicerApp(App):
     def action_stop(self) -> None:
         self.player.stop()
         self._playing_index = None
+        self._stop_hackscript()
         self._set_message("Stopped")
 
     def action_seek_back(self) -> None:
@@ -545,6 +598,7 @@ class RhythmSlicerApp(App):
 
     def action_quit_app(self) -> None:
         self.player.stop()
+        self._stop_hackscript()
         self._save_config()
         self.exit()
 
@@ -599,6 +653,7 @@ class RhythmSlicerApp(App):
             if was_playing:
                 self.player.stop()
                 self._playing_index = None
+                self._stop_hackscript()
                 self._set_message("Playlist empty")
             else:
                 self._set_message(f"Removed: {removed_track.title}")
@@ -802,6 +857,15 @@ class RhythmSlicerApp(App):
             self._scrub_active = False
             event.stop()
 
+    def on_resize(self, event: events.Resize) -> None:
+        del event
+        self._update_visualizer_viewport()
+        self._update_playlist_view()
+        if self._current_track_path:
+            self._restart_hackscript()
+        elif self._visualizer and not self._frame_player.is_running:
+            self._visualizer.update(self._render_visualizer())
+
 
     def on_mouse_scroll_down(self, event: events.MouseScrollDown) -> None:
         if not self._playlist_list:
@@ -962,6 +1026,76 @@ class RhythmSlicerApp(App):
         self._save_config()
         suffix = " (recursive)" if recursive and path.is_dir() else ""
         self._set_message(f"Loaded {len(new_playlist.tracks)} tracks{suffix}")
+
+    def _visualizer_viewport(self) -> tuple[int, int]:
+        if not self._visualizer:
+            return (1, 1)
+        size = getattr(self._visualizer, "content_size", None) or self._visualizer.size
+        width = max(1, getattr(size, "width", 1))
+        height = max(1, getattr(size, "height", 1))
+        return (width, height)
+
+    def _update_visualizer_viewport(self) -> None:
+        width, height = self._visualizer_viewport()
+        self._viewport_width = width
+        self._viewport_height = height
+
+    def _tiny_visualizer_text(self, width: int, height: int) -> str:
+        message = "Visualizer too small"
+        line = _truncate_line(message, width).ljust(width)
+        lines = [line] + [" " * width for _ in range(max(0, height - 1))]
+        return "\n".join(lines)
+
+    def _clip_frame_text(self, text: str, width: int, height: int) -> str:
+        if width <= 0 or height <= 0:
+            return ""
+        lines = text.splitlines()
+        if not lines:
+            lines = [""]
+        clipped: list[str] = []
+        for idx in range(height):
+            line = lines[idx] if idx < len(lines) else ""
+            if len(line) > width:
+                line = line[:width]
+            clipped.append(line.ljust(width))
+        return "\n".join(clipped)
+
+    def _show_frame(self, frame: HackFrame) -> None:
+        if not self._visualizer:
+            return
+        width, height = self._visualizer_viewport()
+        if width <= 2 or height <= 1:
+            text = self._tiny_visualizer_text(width, height)
+            self._last_visualizer_text = text
+            self._visualizer.update(text)
+            return
+        clipped = self._clip_frame_text(frame.text, width, height)
+        self._last_visualizer_text = clipped
+        self._visualizer.update(clipped)
+
+    def _start_hackscript(self, track_path: Path) -> None:
+        self._update_visualizer_viewport()
+        resolved = track_path.expanduser().resolve()
+        self._current_track_path = resolved
+        prefs = {"show_absolute_paths": False}
+        frames = generate_hackscript(
+            resolved,
+            (self._viewport_width, self._viewport_height),
+            prefs,
+        )
+        self._frame_player.start(frames)
+
+    def _restart_hackscript(self) -> None:
+        if not self._current_track_path:
+            return
+        self._start_hackscript(self._current_track_path)
+
+    def _stop_hackscript(self) -> None:
+        self._frame_player.stop()
+        self._current_track_path = None
+        self._last_visualizer_text = None
+        if self._visualizer:
+            self._visualizer.update(self._render_visualizer())
 
 
 class PlaylistPrompt(ModalScreen[Optional[str]]):
