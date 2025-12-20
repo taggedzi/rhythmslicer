@@ -57,6 +57,11 @@ def build_parser() -> argparse.ArgumentParser:
         action="store_true",
         help="Launch the Textual TUI instead of the basic CLI playback",
     )
+    play_parser.add_argument(
+        "--viz",
+        default=None,
+        help="Visualization name for the TUI",
+    )
 
     tui_parser = subparsers.add_parser("tui", help="Launch the TUI player")
     tui_parser.add_argument(
@@ -64,6 +69,11 @@ def build_parser() -> argparse.ArgumentParser:
         nargs="?",
         default="",
         help="Path to media file",
+    )
+    tui_parser.add_argument(
+        "--viz",
+        default=None,
+        help="Visualization name for the TUI",
     )
 
     subparsers.add_parser("stop", help="Stop playback")
@@ -168,13 +178,13 @@ def _execute_command(player: VlcPlayer, args: argparse.Namespace) -> CommandResu
     return CommandResult(2, f"Unknown command: {args.command}")
 
 
-def _run_tui(path: str, player: VlcPlayer) -> int:
+def _run_tui(path: str, player: VlcPlayer, viz_name: Optional[str]) -> int:
     try:
         from rhythm_slicer.tui import run_tui
     except RuntimeError as exc:
         print(str(exc), file=sys.stderr)
         return 1
-    return run_tui(path, player)
+    return run_tui(path, player, viz_name=viz_name)
 
 
 def main(argv: Optional[Iterable[str]] = None) -> int:
@@ -189,9 +199,9 @@ def main(argv: Optional[Iterable[str]] = None) -> int:
         return 1
 
     if args.command == "tui":
-        return _run_tui(args.path, player)
+        return _run_tui(args.path, player, args.viz)
     if args.command == "play" and getattr(args, "tui", False):
-        return _run_tui(args.path, player)
+        return _run_tui(args.path, player, args.viz)
 
     result = _execute_command(player, args)
     if result.message:

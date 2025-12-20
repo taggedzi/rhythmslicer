@@ -183,6 +183,7 @@ class RhythmSlicerApp(App):
         player: VlcPlayer,
         path: str,
         playlist: Optional[Playlist] = None,
+        viz_name: Optional[str] = None,
         now: Callable[[], float] = time.monotonic,
         rng: Optional[random.Random] = None,
     ) -> None:
@@ -202,7 +203,7 @@ class RhythmSlicerApp(App):
         self._scrub_active = False
         self._repeat_mode = config.repeat_mode
         self._shuffle = config.shuffle
-        self._viz_name = config.viz_name
+        self._viz_name = viz_name or config.viz_name
         self._play_order: list[int] = []
         self._play_order_pos = -1
         self._rng = rng or random.Random()
@@ -1379,8 +1380,8 @@ def _load_recursive_directory(path: Path) -> Playlist:
     return Playlist(tracks)
 
 
-def run_tui(path: str, player: VlcPlayer) -> int:
+def run_tui(path: str, player: VlcPlayer, *, viz_name: Optional[str] = None) -> int:
     """Run the TUI and return an exit code."""
-    app = RhythmSlicerApp(player=player, path=path)
+    app = RhythmSlicerApp(player=player, path=path, viz_name=viz_name)
     app.run()
     return 0
