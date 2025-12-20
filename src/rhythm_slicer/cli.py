@@ -59,7 +59,12 @@ def build_parser() -> argparse.ArgumentParser:
     )
 
     tui_parser = subparsers.add_parser("tui", help="Launch the TUI player")
-    tui_parser.add_argument("path", help="Path to media file")
+    tui_parser.add_argument(
+        "path",
+        nargs="?",
+        default="",
+        help="Path to media file",
+    )
 
     subparsers.add_parser("stop", help="Stop playback")
     subparsers.add_parser("pause", help="Pause playback")

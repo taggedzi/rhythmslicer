@@ -198,8 +198,10 @@ class RhythmSlicerApp(App):
                 if self._last_open_path.exists():
                     self.playlist = load_from_input(self._last_open_path)
                     self._filename = self._last_open_path.name
-            if self.playlist is None:
+            if self.playlist is None and self._explicit_path:
                 self.playlist = load_from_input(Path(self.path))
+            if self.playlist is None:
+                self.playlist = Playlist([])
         await self.set_playlist(self.playlist, preserve_path=None)
         if self.playlist and not self.playlist.is_empty():
             if not self._play_current_track():
