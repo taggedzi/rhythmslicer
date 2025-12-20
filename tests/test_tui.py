@@ -5,7 +5,10 @@ from __future__ import annotations
 import asyncio
 from pathlib import Path
 
+import pytest
+
 from rhythm_slicer import tui
+from rhythm_slicer.config import AppConfig
 from rhythm_slicer.playlist import Playlist, Track
 
 
@@ -53,6 +56,12 @@ class DummyPlayer:
 
 class DummyPlayerNoSeek(DummyPlayer):
     seek_ms = None  # type: ignore[assignment]
+
+
+@pytest.fixture(autouse=True)
+def stub_config(monkeypatch) -> None:
+    monkeypatch.setattr(tui, "load_config", lambda: AppConfig())
+    monkeypatch.setattr(tui, "save_config", lambda cfg: None)
 
 
 def test_visualizer_bars_deterministic() -> None:

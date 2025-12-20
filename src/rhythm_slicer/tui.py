@@ -21,6 +21,7 @@ except Exception as exc:  # pragma: no cover - depends on environment
         "Textual is required for the TUI. Install the 'textual' dependency."
     ) from exc
 
+from rhythm_slicer.config import AppConfig, load_config, save_config
 from rhythm_slicer.player_vlc import VlcPlayer
 from rhythm_slicer.playlist import Playlist, Track, load_from_input, SUPPORTED_EXTENSIONS
 
@@ -140,22 +141,30 @@ class RhythmSlicerApp(App):
         super().__init__()
         self.player = player
         self.path = path
+        self._explicit_path = bool(path)
         self.playlist = playlist
-        self._filename = Path(path).name
-        self._volume = 100
+        self._filename = Path(path).name if path else "RhythmSlicer"
+        config = load_config()
+        self._config = config
+        self._volume = config.volume
         self._now = now
         self._selection_index = 0
         self._scroll_offset = 0
         self._last_click_time = 0.0
         self._last_click_index: Optional[int] = None
         self._scrub_active = False
-        self._repeat_mode = "off"
-        self._shuffle = False
+        self._repeat_mode = config.repeat_mode
+        self._shuffle = config.shuffle
         self._play_order: list[int] = []
         self._play_order_pos = -1
         self._rng = rng or random.Random()
         self._last_playlist_path: Optional[Path] = None
-        self._last_open_path: Optional[Path] = None
+        self._last_open_path: Optional[Path] = (
+            Path(config.last_open_path)
+            if config.last_open_path
+            else None
+        )
+        self._open_recursive = config.open_recursive
         self._message: Optional[TuiMessage] = None
         self._playing_index: Optional[int] = None
         self._header: Optional[Static] = None
@@ -183,8 +192,14 @@ class RhythmSlicerApp(App):
         self._status = self.query_one("#status", Static)
         if self._visualizer:
             self._visualizer.border_title = "Visualizer"
+        self.player.set_volume(self._volume)
         if self.playlist is None:
-            self.playlist = load_from_input(Path(self.path))
+            if not self._explicit_path and self._last_open_path:
+                if self._last_open_path.exists():
+                    self.playlist = load_from_input(self._last_open_path)
+                    self._filename = self._last_open_path.name
+            if self.playlist is None:
+                self.playlist = load_from_input(Path(self.path))
         await self.set_playlist(self.playlist, preserve_path=None)
         if self.playlist and not self.playlist.is_empty():
             if not self._play_current_track():
@@ -197,6 +212,18 @@ class RhythmSlicerApp(App):
 
     def _set_message(self, text: str, duration: float = 2.0) -> None:
         self._message = TuiMessage(text=text, until=self._now() + duration)
+
+    def _save_config(self) -> None:
+        self._config = AppConfig(
+            last_open_path=str(self._last_open_path)
+            if self._last_open_path
+            else None,
+            open_recursive=self._open_recursive,
+            volume=self._volume,
+            repeat_mode=self._repeat_mode,
+            shuffle=self._shuffle,
+        )
+        save_config(self._config)
 
     def _pop_message(self) -> Optional[str]:
         if self._message and self._message.until > self._now():
@@ -428,11 +455,13 @@ class RhythmSlicerApp(App):
         self._volume = min(100, self._volume + 5)
         self.player.set_volume(self._volume)
         self._set_message(f"Volume {self._volume}")
+        self._save_config()
 
     def action_volume_down(self) -> None:
         self._volume = max(0, self._volume - 5)
         self.player.set_volume(self._volume)
         self._set_message(f"Volume {self._volume}")
+        self._save_config()
 
     def action_next_track(self) -> None:
         if not self.playlist or self.playlist.is_empty():
@@ -460,6 +489,7 @@ class RhythmSlicerApp(App):
 
     def action_quit_app(self) -> None:
         self.player.stop()
+        self._save_config()
         self.exit()
 
     def action_move_up(self) -> None:
@@ -521,11 +551,13 @@ class RhythmSlicerApp(App):
         current = modes.index(self._repeat_mode)
         self._repeat_mode = modes[(current + 1) % len(modes)]
         self._set_message(f"Repeat: {self._repeat_mode}")
+        self._save_config()
 
     def action_toggle_shuffle(self) -> None:
         self._shuffle = not self._shuffle
         self._reset_play_order()
         self._set_message(f"Shuffle: {'on' if self._shuffle else 'off'}")
+        self._save_config()
 
     async def action_save_playlist(self) -> None:
         if not self.playlist or self.playlist.is_empty():
@@ -834,7 +866,7 @@ class RhythmSlicerApp(App):
 
     async def _open_flow(self) -> None:
         default = str(self._last_open_path) if self._last_open_path else ""
-        result = await self.push_screen_wait(OpenPrompt(default))
+        result = await self.push_screen_wait(OpenPrompt(default, self._open_recursive))
         if not result:
             return
         path_str, recursive = _parse_open_prompt_result(result)
@@ -857,6 +889,9 @@ class RhythmSlicerApp(App):
             self._set_message("No supported audio files found")
             return
         await self.set_playlist_from_open(new_playlist, source_path=path)
+        self._last_open_path = path
+        self._open_recursive = recursive
+        self._save_config()
         suffix = " (recursive)" if recursive and path.is_dir() else ""
         self._set_message(f"Loaded {len(new_playlist.tracks)} tracks{suffix}")
 
@@ -941,10 +976,10 @@ class PlaylistPrompt(ModalScreen[Optional[str]]):
 class OpenPrompt(ModalScreen[Optional[str]]):
     """Modal prompt for opening a path."""
 
-    def __init__(self, default_path: str) -> None:
+    def __init__(self, default_path: str, recursive_default: bool) -> None:
         super().__init__()
         self._default_path = default_path
-        self._recursive = False
+        self._recursive = recursive_default
 
     def compose(self) -> ComposeResult:
         with Container(id="playlist_prompt"):
@@ -954,10 +989,12 @@ class OpenPrompt(ModalScreen[Optional[str]]):
                 "Enter a folder, audio file, or .m3u/.m3u8 playlist path",
                 id="prompt_hint",
             )
-            yield Button(
-                "Load subfolders recursively: Off",
-                id="prompt_recursive",
+            label = (
+                "Load subfolders recursively: On"
+                if self._recursive
+                else "Load subfolders recursively: Off"
             )
+            yield Button(label, id="prompt_recursive")
             with Horizontal(id="prompt_buttons"):
                 yield Button("Open", id="prompt_open")
                 yield Button("Cancel", id="prompt_cancel")
