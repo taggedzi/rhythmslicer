@@ -50,8 +50,15 @@ python -m rhythm_slicer.cli play path/to/file.mp3
 
 ## Visualizations (preview)
 
-The `--viz <name>` flag selects a built-in visualization by name. Arbitrary
-Python file execution is not supported.
+The `--viz <name>` flag selects a built-in visualization by name. Built-ins:
+`hackscope`, `minimal`, `matrix`. Arbitrary Python file execution is not
+supported.
+
+Example:
+
+```bash
+python -m rhythm_slicer.hackscript path/to/file.mp3 --viz matrix
+```
 
 ## Platform prerequisites
 
