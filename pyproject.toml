@@ -1,0 +1,28 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "rhythm-slicer-pro"
+version = "0.1.0"
+description = "RhythmSlicer Pro: cross-platform CLI MP3 player powered by VLC."
+readme = "README.md"
+requires-python = ">=3.9"
+license = { text = "MIT" }
+authors = [
+  { name = "RhythmSlicer Pro Contributors" }
+]
+dependencies = [
+  "python-vlc>=3.0.0"
+]
+
+[project.optional-dependencies]
+dev = [
+  "pytest>=7.0"
+]
+
+[project.scripts]
+r-slicer = "rhythm_slicer.cli:main"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/rhythm_slicer"]
