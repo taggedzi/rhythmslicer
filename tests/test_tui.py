@@ -114,6 +114,55 @@ def test_target_ms_from_ratio() -> None:
     assert tui.target_ms_from_ratio(1000, 1.0) == 1000
 
 
+def test_build_play_order_no_shuffle() -> None:
+    rng = __import__("random").Random(1)
+    order, pos = tui.build_play_order(4, 2, False, rng)
+    assert order == [0, 1, 2, 3]
+    assert pos == 2
+
+
+def test_build_play_order_shuffle_keeps_current() -> None:
+    rng = __import__("random").Random(2)
+    order, pos = tui.build_play_order(5, 3, True, rng)
+    assert order[pos] == 3
+
+
+def test_next_prev_respects_wrap() -> None:
+    tracks = [
+        Track(path=Path("one.mp3"), title="one.mp3"),
+        Track(path=Path("two.mp3"), title="two.mp3"),
+    ]
+    playlist = Playlist(tracks)
+    player = DummyPlayer()
+    app = tui.RhythmSlicerApp(player=player, path="song.mp3", playlist=playlist)
+    app._reset_play_order()
+    assert app._next_index(wrap=False) == 1
+    assert app._next_index(wrap=False) is None
+    assert app._prev_index(wrap=False) == 0
+
+
+def test_shuffle_toggle_keeps_current_index() -> None:
+    tracks = [
+        Track(path=Path("one.mp3"), title="one.mp3"),
+        Track(path=Path("two.mp3"), title="two.mp3"),
+        Track(path=Path("three.mp3"), title="three.mp3"),
+    ]
+    playlist = Playlist(tracks)
+    playlist.set_index(1)
+    player = DummyPlayer()
+    app = tui.RhythmSlicerApp(
+        player=player,
+        path="song.mp3",
+        playlist=playlist,
+        rng=__import__("random").Random(3),
+    )
+    app._reset_play_order()
+    original = playlist.index
+    app._shuffle = True
+    app._reset_play_order()
+    assert app._play_order[app._play_order_pos] == original
+
+
 def test_next_track_advances_playlist() -> None:
     tracks = [
         Track(path=Path("one.mp3"), title="one.mp3"),
@@ -122,6 +171,7 @@ def test_next_track_advances_playlist() -> None:
     playlist = Playlist(tracks)
     player = DummyPlayer()
     app = tui.RhythmSlicerApp(player=player, path="song.mp3", playlist=playlist)
+    app._reset_play_order()
     app.action_next_track()
     assert playlist.index == 1
     assert player.loaded[-1] == "two.mp3"

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 import math
+import random
 from pathlib import Path
 import time
 from typing import Callable, Optional
@@ -76,6 +77,25 @@ def target_ms_from_ratio(length_ms: int, ratio: float) -> int:
     """Return a target time in ms for a ratio of track length."""
     return int(max(0.0, min(1.0, ratio)) * max(0, length_ms))
 
+
+def build_play_order(
+    count: int,
+    current_index: int,
+    shuffle: bool,
+    rng: random.Random,
+) -> tuple[list[int], int]:
+    """Build a play order and return the order plus the current position."""
+    if count <= 0:
+        return [], -1
+    order = list(range(count))
+    if shuffle and count > 1:
+        rng.shuffle(order)
+    try:
+        position = order.index(current_index)
+    except ValueError:
+        position = 0
+    return order, position
+
 @dataclass
 class TuiMessage:
     text: str
@@ -99,6 +119,8 @@ class RhythmSlicerApp(App):
         Binding("enter", "play_selected", "Play Selected"),
         Binding("+", "volume_up", "Volume +5"),
         Binding("-", "volume_down", "Volume -5"),
+        Binding("r", "cycle_repeat", "Repeat Mode"),
+        Binding("h", "toggle_shuffle", "Shuffle"),
         Binding("q", "quit_app", "Quit"),
     ]
 
@@ -109,6 +131,7 @@ class RhythmSlicerApp(App):
         path: str,
         playlist: Optional[Playlist] = None,
         now: Callable[[], float] = time.monotonic,
+        rng: Optional[random.Random] = None,
     ) -> None:
         super().__init__()
         self.player = player
@@ -122,6 +145,11 @@ class RhythmSlicerApp(App):
         self._last_click_time = 0.0
         self._last_click_index: Optional[int] = None
         self._scrub_active = False
+        self._repeat_mode = "off"
+        self._shuffle = False
+        self._play_order: list[int] = []
+        self._play_order_pos = -1
+        self._rng = rng or random.Random()
         self._message: Optional[TuiMessage] = None
         self._header: Optional[Static] = None
         self._visualizer: Optional[Static] = None
@@ -150,6 +178,7 @@ class RhythmSlicerApp(App):
             self._visualizer.border_title = "Visualizer"
         if self.playlist is None:
             self.playlist = load_from_input(Path(self.path))
+        self._reset_play_order()
         await self._populate_playlist()
         self._sync_selection()
         if self.playlist and not self.playlist.is_empty():
@@ -182,12 +211,15 @@ class RhythmSlicerApp(App):
             if track:
                 track_info = f"{self.playlist.index + 1}/{len(self.playlist.tracks)}"
                 title = track.title
-        hotkeys = "Keys: Space S ←/→ N/P Enter Q + -"
+        repeat_label = self._repeat_mode.capitalize()
+        shuffle_label = "On" if self._shuffle else "Off"
+        hotkeys = "Keys: Space S ←/→ N/P Enter Q + - R H"
         message = self._pop_message()
         track_count = len(self.playlist.tracks) if self.playlist else 0
         base = (
             f"State: {state} | Track: {track_info} {title} | "
-            f"Time: {timing} | Vol: {self._volume} | {hotkeys} | Tracks: {track_count}"
+            f"Time: {timing} | Vol: {self._volume} | "
+            f"R:{repeat_label} S:{shuffle_label} | {hotkeys} | Tracks: {track_count}"
         )
         line = f"{message} | {base}" if message else base
         if self._status:
@@ -281,12 +313,17 @@ class RhythmSlicerApp(App):
     def _advance_track(self, auto: bool = False) -> None:
         if not self.playlist or self.playlist.is_empty():
             return
-        track = self.playlist.next()
-        if track is None:
-            if auto:
+        if auto and self._repeat_mode == "one":
+            self._play_current_track()
+            return
+        wrap = self._repeat_mode == "all"
+        next_index = self._next_index(wrap=wrap)
+        if next_index is None:
+            if auto and self._repeat_mode == "off":
                 self.player.stop()
             self._set_message("End of playlist")
             return
+        self._set_selected(next_index)
         if not self._play_current_track():
             self._skip_failed_track()
 
@@ -361,20 +398,25 @@ class RhythmSlicerApp(App):
         if not self.playlist or self.playlist.is_empty():
             self._set_message("No tracks loaded")
             return
-        self._advance_track()
-        self._sync_selection()
+        next_index = self._next_index(wrap=self._repeat_mode == "all")
+        if next_index is None:
+            self._set_message("End of playlist")
+            return
+        self._set_selected(next_index)
+        if not self._play_current_track():
+            self._skip_failed_track()
 
     def action_previous_track(self) -> None:
         if not self.playlist or self.playlist.is_empty():
             self._set_message("No tracks loaded")
             return
-        track = self.playlist.prev()
-        if track is None:
+        prev_index = self._prev_index(wrap=self._repeat_mode == "all")
+        if prev_index is None:
             self._set_message("Start of playlist")
             return
+        self._set_selected(prev_index)
         if not self._play_current_track():
             self._skip_failed_track()
-        self._sync_selection()
 
     def action_quit_app(self) -> None:
         self.player.stop()
@@ -383,13 +425,14 @@ class RhythmSlicerApp(App):
     def action_move_up(self) -> None:
         if not self.playlist or self.playlist.is_empty():
             return
-        self._set_selected(max(0, self._selection_index - 1))
+        self._set_selected(max(0, self._selection_index - 1), update_playlist=False)
 
     def action_move_down(self) -> None:
         if not self.playlist or self.playlist.is_empty():
             return
         self._set_selected(
-            min(len(self.playlist.tracks) - 1, self._selection_index + 1)
+            min(len(self.playlist.tracks) - 1, self._selection_index + 1),
+            update_playlist=False,
         )
 
     def action_play_selected(self) -> None:
@@ -397,6 +440,17 @@ class RhythmSlicerApp(App):
             self._set_message("No tracks loaded")
             return
         self._play_selected()
+
+    def action_cycle_repeat(self) -> None:
+        modes = ["off", "one", "all"]
+        current = modes.index(self._repeat_mode)
+        self._repeat_mode = modes[(current + 1) % len(modes)]
+        self._set_message(f"Repeat: {self._repeat_mode}")
+
+    def action_toggle_shuffle(self) -> None:
+        self._shuffle = not self._shuffle
+        self._reset_play_order()
+        self._set_message(f"Shuffle: {'on' if self._shuffle else 'off'}")
 
     def _update_playlist_view(self) -> None:
         if not self._playlist_list or not self.playlist:
@@ -459,18 +513,22 @@ class RhythmSlicerApp(App):
             return None
         return index
 
-    def _set_selected(self, index: int) -> None:
+    def _set_selected(self, index: int, *, update_playlist: bool = True) -> None:
         if not self.playlist or self.playlist.is_empty():
             return
         index = max(0, min(index, len(self.playlist.tracks) - 1))
         self._selection_index = index
-        self.playlist.set_index(index)
+        if update_playlist:
+            self.playlist.set_index(index)
+            self._sync_play_order_pos()
         self._update_playlist_view()
 
     def _play_selected(self) -> None:
         if not self.playlist or self.playlist.is_empty():
             self._set_message("No tracks loaded")
             return
+        self.playlist.set_index(self._selection_index)
+        self._sync_play_order_pos()
         if not self._play_current_track():
             self._skip_failed_track()
         self._sync_selection()
@@ -560,6 +618,52 @@ class RhythmSlicerApp(App):
         self._scroll_offset = max(0, self._scroll_offset - 1)
         self._update_playlist_view()
         event.stop()
+
+    def _reset_play_order(self) -> None:
+        if not self.playlist or self.playlist.is_empty():
+            self._play_order = []
+            self._play_order_pos = -1
+            return
+        self._play_order, self._play_order_pos = build_play_order(
+            len(self.playlist.tracks),
+            self.playlist.index,
+            self._shuffle,
+            self._rng,
+        )
+
+    def _sync_play_order_pos(self) -> None:
+        if not self.playlist or not self._play_order:
+            return
+        try:
+            self._play_order_pos = self._play_order.index(self.playlist.index)
+        except ValueError:
+            self._play_order_pos = 0
+
+    def _next_index(self, *, wrap: bool) -> Optional[int]:
+        if not self._play_order:
+            return None
+        if self._play_order_pos < 0:
+            self._sync_play_order_pos()
+        next_pos = self._play_order_pos + 1
+        if next_pos >= len(self._play_order):
+            if not wrap:
+                return None
+            next_pos = 0
+        self._play_order_pos = next_pos
+        return self._play_order[next_pos]
+
+    def _prev_index(self, *, wrap: bool) -> Optional[int]:
+        if not self._play_order:
+            return None
+        if self._play_order_pos < 0:
+            self._sync_play_order_pos()
+        prev_pos = self._play_order_pos - 1
+        if prev_pos < 0:
+            if not wrap:
+                return None
+            prev_pos = len(self._play_order) - 1
+        self._play_order_pos = prev_pos
+        return self._play_order[prev_pos]
 
 
 def _truncate_line(text: str, max_width: int) -> str:
