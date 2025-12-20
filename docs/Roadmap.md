@@ -235,18 +235,3 @@ This is what makes it *shareable*.
 * Shuffle/repeat
 * Seek math
 * UI selection logic (mocked)
-
----
-
-## 🎯 DEFINITION OF “DONE”
-
-### MVP Done when:
-
-* Phases **1–3** are complete
-
-### Polished Release when:
-
-* Phases **1–5** are complete
-
-You do **not** need to finish the visualizer to ship a good MVP.
-
