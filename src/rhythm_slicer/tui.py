@@ -11,6 +11,7 @@ import random
 from pathlib import Path
 import time
 from typing import Callable, Iterator, Optional
+import logging
 
 try:
     from textual.app import App, ComposeResult
@@ -27,10 +28,14 @@ except Exception as exc:  # pragma: no cover - depends on environment
 
 from rhythm_slicer.config import AppConfig, load_config, save_config
 from rhythm_slicer.hackscript import HackFrame, generate as generate_hackscript
+from rhythm_slicer.hangwatch import HangWatchdog, dump_threads
+from rhythm_slicer.logging_setup import set_console_level
 from rhythm_slicer.visualizations.ansi import sanitize_ansi_sgr
 from rhythm_slicer.metadata import format_display_title, get_track_meta
 from rhythm_slicer.player_vlc import VlcPlayer
 from rhythm_slicer.playlist import Playlist, Track, load_from_input, SUPPORTED_EXTENSIONS
+
+logger = logging.getLogger(__name__)
 
 
 def visualizer_bars(seed_ms: int, width: int, height: int) -> list[int]:
@@ -135,6 +140,7 @@ class FramePlayer:
         try:
             frame = next(self._frames)
         except Exception as exc:
+            logger.exception("Visualizer frame error")
             self._app._set_message(f"Visualizer error: {exc}", level="error")
             self.stop()
             return
@@ -299,6 +305,7 @@ class RhythmSlicerApp(App):
         Binding("v", "select_visualization", "Visualization"),
         Binding("ctrl+s", "save_playlist", "Save Playlist"),
         Binding("ctrl+o", "open", "Open"),
+        Binding("ctrl+shift+d", "dump_threads", "Dump Threads"),
         Binding("q", "quit_app", "Quit"),
     ]
 
@@ -358,6 +365,8 @@ class RhythmSlicerApp(App):
         self._viz_restart_timer: Optional[object] = None
         self._visualizer_ready = False
         self._visualizer_init_attempts = 0
+        self._last_ui_tick = self._now()
+        self._hang_watchdog: Optional[HangWatchdog] = None
 
     def compose(self) -> ComposeResult:
         with Vertical():
@@ -398,6 +407,8 @@ class RhythmSlicerApp(App):
             self._visualizer.border_title = "Visualizer"
         self._update_visualizer_hud()
         self._update_visualizer_viewport()
+        self._install_asyncio_exception_handler()
+        self._start_hang_watchdog()
         self.player.set_volume(self._volume)
         if self.playlist is None:
             if not self._explicit_path and self._last_open_path:
@@ -418,7 +429,25 @@ class RhythmSlicerApp(App):
             self.set_focus(self._playlist_list)
         self._update_transport_row()
         self.set_interval(0.1, self._on_tick)
+        self.set_interval(0.5, self._update_ui_tick)
+        self.set_interval(10.0, self._log_heartbeat)
         self.call_later(self._finalize_visualizer_layout)
+        logger.info("TUI mounted")
+
+    def _install_asyncio_exception_handler(self) -> None:
+        try:
+            loop = asyncio.get_running_loop()
+        except RuntimeError:
+            return
+
+        def handler(_loop: asyncio.AbstractEventLoop, context: dict) -> None:
+            exc = context.get("exception")
+            if exc:
+                logger.exception("Asyncio exception", exc_info=exc)
+            else:
+                logger.error("Asyncio error: %s", context.get("message"))
+
+        loop.set_exception_handler(handler)
 
     def _finalize_visualizer_layout(self) -> None:
         if self._visualizer_ready:
@@ -435,6 +464,42 @@ class RhythmSlicerApp(App):
         elif self._visualizer and not self._frame_player.is_running:
             self._visualizer.update(self._render_visualizer())
         self._visualizer_ready = True
+        logger.info(
+            "Visualizer layout ready (%sx%s)", self._viewport_width, self._viewport_height
+        )
+
+    def _start_hang_watchdog(self) -> None:
+        if self._hang_watchdog:
+            return
+        self._hang_watchdog = HangWatchdog(
+            lambda: self._last_ui_tick,
+            threshold_seconds=15.0,
+            repeat_seconds=30.0,
+        )
+        self._hang_watchdog.start()
+
+    def _update_ui_tick(self) -> None:
+        self._last_ui_tick = self._now()
+
+    def _log_heartbeat(self) -> None:
+        state = self.player.get_state()
+        title = None
+        track_index = None
+        if self.playlist and not self.playlist.is_empty():
+            track = self.playlist.current()
+            if track:
+                title = track.title
+                track_index = self.playlist.index
+        position = self.player.get_position_ms()
+        pos_sec = None if position is None else int(position / 1000)
+        logger.info(
+            "Heartbeat state=%s track_index=%s title=%s pos_sec=%s viz=%s",
+            state,
+            track_index,
+            title,
+            pos_sec,
+            self._viz_name,
+        )
 
     def _set_message(
         self,
@@ -683,9 +748,11 @@ class RhythmSlicerApp(App):
             self.player.load(str(track.path))
             self.player.play()
         except Exception:
+            logger.exception("Playback failed for %s", track.path)
             self._set_message(f"Failed to play: {track.title}", level="error")
             return False
         self._playing_index = self.playlist.index
+        logger.info("Track change index=%s path=%s", self.playlist.index, track.path)
         self._sync_selection()
         self._start_hackscript(
             track.path,
@@ -803,19 +870,23 @@ class RhythmSlicerApp(App):
             self.player.pause()
             self._set_message("Paused")
             desired_state = "paused"
+            logger.info("Playback paused")
         elif "paused" in state:
             self.player.play()
             self._set_message("Playing")
             desired_state = "playing"
+            logger.info("Playback resumed")
         else:
             if self.playlist and not self.playlist.is_empty():
                 if self._play_current_track():
                     self._set_message("Playing")
+                    logger.info("Playback started")
                     return
                 return
             self.player.play()
             self._set_message("Playing")
             desired_state = "playing"
+            logger.info("Playback started")
         pos_ms = self._get_playback_position_ms()
         self._restart_hackscript(
             playback_pos_ms=pos_ms,
@@ -828,6 +899,7 @@ class RhythmSlicerApp(App):
         self._playing_index = None
         self._stop_hackscript()
         self._set_message("Stopped")
+        logger.info("Playback stopped")
         self._update_visualizer_hud()
 
     def action_seek_back(self) -> None:
@@ -879,10 +951,23 @@ class RhythmSlicerApp(App):
             self._skip_failed_track()
 
     def action_quit_app(self) -> None:
+        logger.info("TUI exit requested")
         self.player.stop()
         self._stop_hackscript()
         self._save_config()
+        if self._hang_watchdog:
+            self._hang_watchdog.stop()
         self.exit()
+
+    def action_dump_threads(self) -> None:
+        self._set_message("Dumping threads")
+        logger.info("Manual thread dump requested")
+        dump_threads("manual dump")
+
+    def on_shutdown(self) -> None:
+        logger.info("TUI shutdown")
+        if self._hang_watchdog:
+            self._hang_watchdog.stop()
 
     def on_button_pressed(self, event: Button.Pressed) -> None:
         if event.button.id == "repeat_toggle":
@@ -977,6 +1062,7 @@ class RhythmSlicerApp(App):
         if self._current_track_path:
             self._restart_hackscript_from_player()
         self._set_message(f"Visualization: {selection}")
+        logger.info("Visualization set to %s", selection)
 
     async def action_save_playlist(self) -> None:
         if not self.playlist or self.playlist.is_empty():
@@ -1297,10 +1383,12 @@ class RhythmSlicerApp(App):
 
             save_m3u8(self.playlist, dest, mode="absolute" if absolute else "auto")
         except Exception as exc:
+            logger.exception("Save playlist failed: %s", dest)
             self._set_message(f"Save failed: {exc}", level="error")
             return
         self._last_playlist_path = dest
         self._set_message(f"Saved playlist: {dest}")
+        logger.info("Playlist saved to %s", dest)
 
     async def _load_playlist_flow(self) -> None:
         default = str(self._last_playlist_path) if self._last_playlist_path else ""
@@ -1312,6 +1400,7 @@ class RhythmSlicerApp(App):
         try:
             new_playlist = load_from_input(path)
         except Exception as exc:
+            logger.exception("Load playlist failed: %s", path)
             self._set_message(f"Load failed: {exc}", level="error")
             return
         if new_playlist.is_empty():
@@ -1324,6 +1413,7 @@ class RhythmSlicerApp(App):
             self._skip_failed_track()
         else:
             self._set_message(f"Loaded playlist: {path}")
+            logger.info("Playlist loaded from %s", path)
 
     async def _open_flow(self) -> None:
         default = str(self._last_open_path) if self._last_open_path else ""
@@ -1344,6 +1434,7 @@ class RhythmSlicerApp(App):
             else:
                 new_playlist = load_from_input(path)
         except Exception as exc:
+            logger.exception("Open path failed: %s", path)
             self._set_message(f"Load failed: {exc}", level="error")
             return
         if new_playlist.is_empty():
@@ -1355,6 +1446,7 @@ class RhythmSlicerApp(App):
         self._save_config()
         suffix = " (recursive)" if recursive and path.is_dir() else ""
         self._set_message(f"Loaded {len(new_playlist.tracks)} tracks{suffix}")
+        logger.info("Tracks loaded count=%s path=%s", len(new_playlist.tracks), path)
 
     def _visualizer_viewport(self) -> tuple[int, int]:
         if not self._visualizer:
@@ -1446,6 +1538,12 @@ class RhythmSlicerApp(App):
             "playback_state": playback_state,
         }
         self._viz_prefs = dict(prefs)
+        logger.info(
+            "Visualizer start name=%s size=%sx%s",
+            self._viz_name,
+            self._viewport_width,
+            self._viewport_height,
+        )
         frames = generate_hackscript(
             resolved,
             (self._viewport_width, self._viewport_height),
@@ -1462,6 +1560,7 @@ class RhythmSlicerApp(App):
     ) -> None:
         if not self._current_track_path:
             return
+        logger.info("Visualizer restart name=%s", self._viz_name)
         self._start_hackscript(
             self._current_track_path,
             playback_pos_ms=playback_pos_ms,
@@ -1473,6 +1572,7 @@ class RhythmSlicerApp(App):
         self._current_track_path = None
         self._last_visualizer_text = None
         self._viz_prefs = {}
+        logger.info("Visualizer stop")
         if self._viz_restart_timer is not None:
             stopper = getattr(self._viz_restart_timer, "stop", None)
             if callable(stopper):
@@ -1736,6 +1836,12 @@ def _load_recursive_directory(path: Path) -> Playlist:
 
 def run_tui(path: str, player: VlcPlayer, *, viz_name: Optional[str] = None) -> int:
     """Run the TUI and return an exit code."""
+    logger.info("TUI start path=%s viz=%s", path, viz_name)
+    try:
+        set_console_level(logging.WARNING)
+    except Exception:
+        logger.exception("Failed to set console log level for TUI")
     app = RhythmSlicerApp(player=player, path=path, viz_name=viz_name)
     app.run()
+    logger.info("TUI exit")
     return 0

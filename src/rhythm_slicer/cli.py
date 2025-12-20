@@ -5,6 +5,8 @@ from __future__ import annotations
 import argparse
 import sys
 import time
+import logging
+import threading
 from dataclasses import dataclass
 from typing import Callable, Iterable, Optional
 from pathlib import Path
@@ -12,6 +14,10 @@ from pathlib import Path
 from rhythm_slicer.player_vlc import VlcPlayer
 from rhythm_slicer.playlist import load_from_input
 from rhythm_slicer.playlist_io import save_m3u8
+from rhythm_slicer.logging_setup import init_logging
+from rhythm_slicer.hangwatch import enable_faulthandler, dump_threads
+
+logger = logging.getLogger(__name__)
 
 
 @dataclass(frozen=True)
@@ -189,6 +195,24 @@ def _run_tui(path: str, player: VlcPlayer, viz_name: Optional[str]) -> int:
 
 def main(argv: Optional[Iterable[str]] = None) -> int:
     """Entry point for the CLI."""
+    log_path = init_logging()
+    enable_faulthandler(log_path)
+    logger.info("App start")
+
+    def excepthook(exc_type, exc, tb) -> None:
+        logger.exception("Uncaught exception", exc_info=(exc_type, exc, tb))
+        dump_threads("uncaught exception")
+
+    sys.excepthook = excepthook
+
+    if hasattr(threading, "excepthook"):
+        def thread_hook(args: threading.ExceptHookArgs) -> None:
+            exc_info = (args.exc_type, args.exc_value, args.exc_traceback)
+            logger.exception(
+                "Thread exception in %s", args.thread.name, exc_info=exc_info
+            )
+        threading.excepthook = thread_hook
+
     parser = build_parser()
     args = parser.parse_args(list(argv) if argv is not None else None)
 
@@ -209,6 +233,7 @@ def main(argv: Optional[Iterable[str]] = None) -> int:
         print(result.message, file=stream)
     if args.command == "play" and getattr(args, "wait", False) and result.exit_code == 0:
         _wait_for_playback(player, printer=print)
+    logger.info("App exit code=%s", result.exit_code)
     return result.exit_code
 
 
