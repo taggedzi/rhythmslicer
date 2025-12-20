@@ -2,7 +2,10 @@
 
 from __future__ import annotations
 
+from pathlib import Path
+
 from rhythm_slicer import tui
+from rhythm_slicer.playlist import Playlist, Track
 
 
 class DummyPlayer:
@@ -13,9 +16,13 @@ class DummyPlayer:
         self.stop_calls = 0
         self.volume = 100
         self.seeks: list[int] = []
+        self.loaded: list[str] = []
 
     def get_state(self) -> str:
         return self.state
+
+    def load(self, path: str) -> None:
+        self.loaded.append(path)
 
     def play(self) -> None:
         self.play_calls += 1
@@ -93,3 +100,31 @@ def test_volume_adjustments() -> None:
     assert player.volume == 95
     app.action_volume_up()
     assert player.volume == 100
+
+
+def test_next_track_advances_playlist() -> None:
+    tracks = [
+        Track(path=Path("one.mp3"), title="one.mp3"),
+        Track(path=Path("two.mp3"), title="two.mp3"),
+    ]
+    playlist = Playlist(tracks)
+    player = DummyPlayer()
+    app = tui.RhythmSlicerApp(player=player, path="song.mp3", playlist=playlist)
+    app.action_next_track()
+    assert playlist.index == 1
+    assert player.loaded[-1] == "two.mp3"
+
+
+def test_play_selected_uses_list_selection() -> None:
+    tracks = [
+        Track(path=Path("one.mp3"), title="one.mp3"),
+        Track(path=Path("two.mp3"), title="two.mp3"),
+    ]
+    playlist = Playlist(tracks)
+    player = DummyPlayer()
+    app = tui.RhythmSlicerApp(player=player, path="song.mp3", playlist=playlist)
+
+    app._selection_index = 1
+    app.action_play_selected()
+    assert playlist.index == 1
+    assert player.loaded[-1] == "two.mp3"
