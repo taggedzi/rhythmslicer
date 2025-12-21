@@ -3,7 +3,10 @@
 from __future__ import annotations
 
 import json
+import os
 from pathlib import Path
+
+import pytest
 
 from rhythm_slicer import config
 
@@ -55,3 +58,57 @@ def test_save_config_atomic_write(monkeypatch, tmp_path: Path) -> None:
     src, dest = replaced[0]
     assert src.suffix == ".tmp"
     assert dest.name == "config.json"
+
+
+def test_config_from_mapping_sanitizes_values() -> None:
+    raw = {
+        "last_open_path": 123,
+        "open_recursive": "nope",
+        "volume": "loud",
+        "repeat_mode": "bad",
+        "shuffle": "yes",
+        "viz_name": "",
+        "ansi_colors": "maybe",
+    }
+    cfg = config._config_from_mapping(raw)
+    assert cfg.last_open_path is None
+    assert cfg.open_recursive is False
+    assert cfg.volume == 100
+    assert cfg.repeat_mode == "off"
+    assert cfg.shuffle is False
+    assert cfg.viz_name == "hackscope"
+    assert cfg.ansi_colors is False
+
+
+def test_get_config_dir_windows_appdata(monkeypatch, tmp_path: Path) -> None:
+    monkeypatch.setattr(config.os, "name", "nt", raising=False)
+    monkeypatch.setenv("APPDATA", str(tmp_path))
+    path = config.get_config_dir("rhythm")
+    assert path == tmp_path / "rhythm"
+
+
+def test_get_config_dir_windows_default(monkeypatch, tmp_path: Path) -> None:
+    monkeypatch.setattr(config.os, "name", "nt", raising=False)
+    monkeypatch.delenv("APPDATA", raising=False)
+    monkeypatch.setattr(config.Path, "home", lambda: tmp_path)
+    path = config.get_config_dir("rhythm")
+    assert path == tmp_path / "AppData" / "Roaming" / "rhythm"
+
+
+def test_get_config_dir_macos(monkeypatch, tmp_path: Path) -> None:
+    monkeypatch.setattr(config.os, "name", "posix", raising=False)
+    monkeypatch.setattr(config, "_is_macos", lambda: True)
+    monkeypatch.setattr(config.Path, "home", lambda: tmp_path)
+    path = config.get_config_dir("rhythm")
+    assert path == tmp_path / "Library" / "Application Support" / "rhythm"
+
+
+def test_get_config_dir_xdg(monkeypatch, tmp_path: Path) -> None:
+    if os.name == "nt":
+        pytest.skip("XDG config path not used on Windows")
+    monkeypatch.setattr(config.os, "name", "posix", raising=False)
+    monkeypatch.setattr(config, "_is_macos", lambda: False)
+    xdg = tmp_path / "xdg"
+    monkeypatch.setenv("XDG_CONFIG_HOME", str(xdg))
+    path = config.get_config_dir("rhythm")
+    assert path == xdg / "rhythm"

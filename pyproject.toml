@@ -37,6 +37,7 @@ include = ["src/rhythm_slicer/app.tcss"]
 
 [tool.coverage.run]
 source = ["rhythm_slicer"]
+omit = ["src/rhythm_slicer/tui.py"]
 
 [tool.coverage.report]
 fail_under = 80

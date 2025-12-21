@@ -16,6 +16,35 @@ def _strip_sgr(text: str) -> str:
     return _SGR_PATTERN.sub("", text)
 
 
+def test_hackscope_helpers() -> None:
+    assert hackscope._format_duration(None) is None
+    assert hackscope._format_duration(-5) == "00:00"
+    assert hackscope._meta_value({"a": 1}, "a") == "1"
+    assert hackscope._meta_value({}, "a") is None
+    assert hackscope._meta_int({"a": "2"}, "a") == 2
+    assert hackscope._meta_int({"a": "bad"}, "a") is None
+    assert hackscope._clamp_int(5, 0, 3) == 3
+    assert hackscope._clip_lines(["a", "b"], width=0, height=2) == []
+    assert hackscope._clip_lines([], width=3, height=2) == [""]
+    assert hackscope._safe_int("3", 0) == 3
+    assert hackscope._safe_int("nope", 7) == 7
+    assert hackscope._safe_float("2.5", 1.0) == 2.5
+    assert hackscope._safe_float("bad", 1.0) == 1.0
+    assert hackscope._bar(50, 4, fill="X", empty=".") == "XX.."
+    assert hackscope._pad_line("hi", 4) == "hi  "
+    assert hackscope._pad_line("toolong", 3) == "too"
+    frame = hackscope._pad_to_viewport(["x"], width=3, height=2)
+    assert frame.splitlines() == ["x  ", "   "]
+    rendered = hackscope._render_two_col(["a"], ["b"], width=5, height=2, split=2)
+    lines = rendered.splitlines()
+    assert len(lines) == 2
+    assert len(lines[0]) == 5
+    ansi_text = f"{hackscope._ANSI_RED}hi{hackscope._ANSI_RESET}"
+    assert hackscope._strip_sgr(ansi_text) == "hi"
+    truncated = hackscope._truncate_ansi(ansi_text, 1)
+    assert hackscope._strip_sgr(truncated) == "h"
+
+
 def test_hackscope_first_frame_dimensions() -> None:
     ctx = VizContext(
         track_path="song.mp3",

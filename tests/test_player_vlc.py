@@ -85,3 +85,90 @@ def test_missing_vlc_raises_error(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(player_vlc, "_VLC_IMPORT_ERROR", RuntimeError("missing"))
     with pytest.raises(RuntimeError):
         player_vlc.VlcPlayer()
+
+
+def test_load_vlc_import_failure(monkeypatch: pytest.MonkeyPatch) -> None:
+    import builtins
+
+    original_import = builtins.__import__
+
+    def fake_import(name, *args, **kwargs):
+        if name == "vlc":
+            raise ModuleNotFoundError("vlc")
+        return original_import(name, *args, **kwargs)
+
+    monkeypatch.setattr(builtins, "__import__", fake_import)
+    monkeypatch.setattr(player_vlc, "vlc", None)
+    monkeypatch.setattr(player_vlc, "_VLC_IMPORT_ERROR", None)
+    player_vlc._load_vlc()
+    assert player_vlc.vlc is None
+    assert isinstance(player_vlc._VLC_IMPORT_ERROR, ModuleNotFoundError)
+
+
+def test_load_vlc_success(monkeypatch: pytest.MonkeyPatch) -> None:
+    import sys
+
+    class DummyVlc:
+        pass
+
+    monkeypatch.setitem(sys.modules, "vlc", DummyVlc)
+    monkeypatch.setattr(player_vlc, "vlc", None)
+    monkeypatch.setattr(player_vlc, "_VLC_IMPORT_ERROR", None)
+    player_vlc._load_vlc()
+    assert player_vlc.vlc is DummyVlc
+    assert player_vlc._VLC_IMPORT_ERROR is None
+
+
+def test_player_state_unknown_on_errors(monkeypatch: pytest.MonkeyPatch) -> None:
+    class ErrorPlayer(FakeMediaPlayer):
+        def get_state(self):  # type: ignore[override]
+            raise RuntimeError("bad")
+
+        def event_manager(self):  # type: ignore[override]
+            raise RuntimeError("no events")
+
+    class ErrorInstance(FakeInstance):
+        def media_player_new(self) -> ErrorPlayer:  # type: ignore[override]
+            return ErrorPlayer()
+
+    class ErrorVlc:
+        @staticmethod
+        def Instance() -> ErrorInstance:
+            return ErrorInstance()
+
+    monkeypatch.setattr(player_vlc, "vlc", ErrorVlc)
+    monkeypatch.setattr(player_vlc, "_VLC_IMPORT_ERROR", None)
+    player = player_vlc.VlcPlayer()
+    assert player.get_state() == "unknown"
+
+
+def test_player_position_and_seek_errors(monkeypatch: pytest.MonkeyPatch) -> None:
+    class ErrorPlayer(FakeMediaPlayer):
+        def get_time(self):  # type: ignore[override]
+            return -1
+
+        def get_length(self):  # type: ignore[override]
+            return -1
+
+        def set_time(self, value: int) -> None:  # type: ignore[override]
+            raise RuntimeError("bad")
+
+        def set_position(self, value: float) -> None:  # type: ignore[override]
+            raise RuntimeError("bad")
+
+    class ErrorInstance(FakeInstance):
+        def media_player_new(self) -> ErrorPlayer:  # type: ignore[override]
+            return ErrorPlayer()
+
+    class ErrorVlc:
+        @staticmethod
+        def Instance() -> ErrorInstance:
+            return ErrorInstance()
+
+    monkeypatch.setattr(player_vlc, "vlc", ErrorVlc)
+    monkeypatch.setattr(player_vlc, "_VLC_IMPORT_ERROR", None)
+    player = player_vlc.VlcPlayer()
+    assert player.get_position_ms() is None
+    assert player.get_length_ms() is None
+    assert player.seek_ms(1000) is False
+    assert player.set_position_ratio(0.25) is False
