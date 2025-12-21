@@ -34,3 +34,10 @@ r-slicer = "rhythm_slicer.cli:main"
 [tool.hatch.build.targets.wheel]
 packages = ["src/rhythm_slicer"]
 include = ["src/rhythm_slicer/app.tcss"]
+
+[tool.coverage.run]
+source = ["rhythm_slicer"]
+
+[tool.coverage.report]
+fail_under = 80
+show_missing = true

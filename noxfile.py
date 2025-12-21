@@ -73,5 +73,5 @@ def coverage(session: nox.Session) -> None:
     """Run coverage reporting."""
     session.install("-e", ".[dev]")
     session.install("coverage")
-    session.run("coverage", "run", "-m", "pytest")
-    session.run("coverage", "report", "-m")
+    session.run("coverage", "run", "--source=rhythm_slicer", "-m", "pytest")
+    session.run("coverage", "report", "--fail-under=80", "-m")
