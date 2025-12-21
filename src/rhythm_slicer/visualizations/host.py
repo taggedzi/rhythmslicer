@@ -19,5 +19,4 @@ class VizContext:
 class VizPlugin(Protocol):
     VIZ_NAME: str
 
-    def generate_frames(self, ctx: VizContext) -> Iterator[str]:
-        ...
+    def generate_frames(self, ctx: VizContext) -> Iterator[str]: ...

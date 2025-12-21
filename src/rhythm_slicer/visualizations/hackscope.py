@@ -116,14 +116,14 @@ def _render_two_col(
 
     out: list[str] = []
     for i in range(height):
-        l = left[i] if i < len(left) else ""
-        r = right[i] if i < len(right) else ""
-        l = _pad_line(l, left_w)
+        left_line = left[i] if i < len(left) else ""
+        right_line = right[i] if i < len(right) else ""
+        left_line = _pad_line(left_line, left_w)
         if right_w > 0:
-            r = _pad_line(r, right_w)
-            out.append(l + (" " * gutter) + r)
+            right_line = _pad_line(right_line, right_w)
+            out.append(left_line + (" " * gutter) + right_line)
         else:
-            out.append(l)
+            out.append(left_line)
     return "\n".join(out)
 
 
@@ -257,7 +257,11 @@ def _overlay_ambient_line(
     visible = 0
     idx = 0
     while idx < len(content) and visible < width:
-        if content[idx] == "\x1b" and idx + 1 < len(content) and content[idx + 1] == "[":
+        if (
+            content[idx] == "\x1b"
+            and idx + 1 < len(content)
+            and content[idx + 1] == "["
+        ):
             end = content.find("m", idx + 2)
             if end != -1:
                 out.append(content[idx : end + 1])
@@ -337,9 +341,7 @@ def _allocate_phases(
     return allocation
 
 
-def locate_phase(
-    global_frame: int, phases: list[tuple[str, int]]
-) -> tuple[str, int]:
+def locate_phase(global_frame: int, phases: list[tuple[str, int]]) -> tuple[str, int]:
     remaining = max(0, int(global_frame))
     for name, count in phases:
         if remaining < count:
@@ -525,9 +527,7 @@ def render_map(
     left_w = max(1, min(width, (width * 2) // 3))
     right_w = max(0, width - left_w - (1 if width >= 3 else 0))
     lattice_h = max(6, min(10, height - 6))
-    lattice_w = (
-        max(10, min(right_w, 18)) if right_w > 0 else max(10, min(width, 18))
-    )
+    lattice_w = max(10, min(right_w, 18)) if right_w > 0 else max(10, min(width, 18))
     nodes = []
     for _ in range(8):
         x = 1 + (next(prng) % max(1, lattice_w - 2))
@@ -697,7 +697,9 @@ def render_decrypt(
         blk = next(prng) & 0xFFFF
         log.append(f">> block: {blk:04x}")
 
-    header = f"{_color('[HackScope]', _ANSI_CYAN, use_ansi)} DECRYPT / EXTRACT [{stage_id}]"
+    header = (
+        f"{_color('[HackScope]', _ANSI_CYAN, use_ansi)} DECRYPT / EXTRACT [{stage_id}]"
+    )
     progress_bar = _bar(pct, max(10, min(40, width - 18)), fill="█", empty="░")
     progress_bar = _color(progress_bar, _ANSI_GREEN, use_ansi)
     lines: list[str] = [
@@ -737,7 +739,9 @@ def render_extract(
         ">> extract: verified (simulated)",
         ">> checksum: ok (simulated)",
     ]
-    header = f"{_color('[HackScope]', _ANSI_CYAN, use_ansi)} EXTRACT / VERIFY [{stage_id}]"
+    header = (
+        f"{_color('[HackScope]', _ANSI_CYAN, use_ansi)} EXTRACT / VERIFY [{stage_id}]"
+    )
     total = max(1, phase_len)
     pct = int((local_i / max(1, total - 1)) * 100)
     shown = 1 + (local_i * len(base) // max(1, total - 1))
@@ -776,7 +780,9 @@ def render_scan(
     use_ansi: bool = False,
 ) -> str:
     prng = _lcg(_frame_seed(seed, "SCAN", local_i))
-    header = f"{_color('[HackScope]', _ANSI_CYAN, use_ansi)} SCAN / FILE FACTS [{stage_id}]"
+    header = (
+        f"{_color('[HackScope]', _ANSI_CYAN, use_ansi)} SCAN / FILE FACTS [{stage_id}]"
+    )
     total = max(1, phase_len)
     size = facts.get("size")
     path = facts.get("path")
@@ -941,7 +947,10 @@ def _render_dossier(
     channels = _meta_int(meta, "channels")
 
     heading = _color("=== HACKSCRIPT DOSSIER ===", _ANSI_CYAN, use_ansi)
-    label = lambda text: fmt_label(ctx, text)
+
+    def label(text: str) -> str:
+        return fmt_label(ctx, text)
+
     lines = [
         heading,
         f"{label('Title')}    : {_truth_or_unknown(ctx, title)}",

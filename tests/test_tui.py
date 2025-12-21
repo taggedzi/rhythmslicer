@@ -328,6 +328,7 @@ def test_transport_play_pause_clicks() -> None:
     app._handle_transport_action("key_playpause")
     assert player.play_calls == 1
 
+
 def test_open_path_calls_set_playlist(tmp_path: Path, monkeypatch) -> None:
     playlist = Playlist([Track(path=Path("one.mp3"), title="one.mp3")])
     target = tmp_path / "music"

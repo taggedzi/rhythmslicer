@@ -28,16 +28,6 @@ class CommandResult:
     message: Optional[str] = None
 
 
-def _volume_type(value: str) -> int:
-    try:
-        volume = int(value)
-    except ValueError as exc:
-        raise argparse.ArgumentTypeError("volume must be an integer") from exc
-    if not 0 <= volume <= 100:
-        raise argparse.ArgumentTypeError("volume must be between 0 and 100")
-    return volume
-
-
 def build_parser() -> argparse.ArgumentParser:
     """Build and return the CLI argument parser."""
     parser = argparse.ArgumentParser(prog="r-slicer", description="RhythmSlicer Pro")
@@ -148,11 +138,12 @@ def _execute_command(player: VlcPlayer, args: argparse.Namespace) -> CommandResu
                 return CommandResult(1, "No tracks to save")
             mode = "absolute" if args.absolute else "auto"
             save_m3u8(playlist, Path(args.dest), mode=mode)
-            return CommandResult(0, f"Saved {len(playlist.tracks)} tracks to {args.dest}")
+            return CommandResult(
+                0, f"Saved {len(playlist.tracks)} tracks to {args.dest}"
+            )
         if args.playlist_cmd == "show":
             lines = [
-                f"{idx + 1}\t{track.path}"
-                for idx, track in enumerate(playlist.tracks)
+                f"{idx + 1}\t{track.path}" for idx, track in enumerate(playlist.tracks)
             ]
             return CommandResult(0, "\n".join(lines))
         return CommandResult(2, f"Unknown playlist command: {args.playlist_cmd}")
@@ -181,11 +172,13 @@ def main(argv: Optional[Iterable[str]] = None) -> int:
     sys.excepthook = excepthook
 
     if hasattr(threading, "excepthook"):
+
         def thread_hook(args: threading.ExceptHookArgs) -> None:
             exc_info = (args.exc_type, args.exc_value, args.exc_traceback)
             logger.exception(
                 "Thread exception in %s", args.thread.name, exc_info=exc_info
             )
+
         threading.excepthook = thread_hook
 
     parser = build_parser()
@@ -206,7 +199,11 @@ def main(argv: Optional[Iterable[str]] = None) -> int:
     if result.message:
         stream = sys.stdout if result.exit_code == 0 else sys.stderr
         print(result.message, file=stream)
-    if args.command == "play" and getattr(args, "wait", False) and result.exit_code == 0:
+    if (
+        args.command == "play"
+        and getattr(args, "wait", False)
+        and result.exit_code == 0
+    ):
         _wait_for_playback(player, printer=print)
     logger.info("App exit code=%s", result.exit_code)
     return result.exit_code

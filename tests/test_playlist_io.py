@@ -13,10 +13,12 @@ def test_round_trip_save_load_preserves_order(tmp_path: Path) -> None:
     track_b = tmp_path / "b.mp3"
     track_a.write_text("a", encoding="utf-8")
     track_b.write_text("b", encoding="utf-8")
-    playlist = Playlist([
-        Track(path=track_b, title="b.mp3"),
-        Track(path=track_a, title="a.mp3"),
-    ])
+    playlist = Playlist(
+        [
+            Track(path=track_b, title="b.mp3"),
+            Track(path=track_a, title="a.mp3"),
+        ]
+    )
     dest = tmp_path / "list.m3u8"
     save_m3u8(playlist, dest)
     loaded = load_m3u_any(dest)

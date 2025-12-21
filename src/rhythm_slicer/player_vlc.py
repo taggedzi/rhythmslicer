@@ -5,19 +5,30 @@ from __future__ import annotations
 from typing import Optional
 import threading
 
-try:
-    import vlc  # type: ignore
-except Exception as exc:  # pragma: no cover - platform-dependent import
-    vlc = None  # type: ignore
-    _VLC_IMPORT_ERROR = exc
-else:
-    _VLC_IMPORT_ERROR = None
+vlc = None  # type: ignore
+_VLC_IMPORT_ERROR = None
+
+
+def _load_vlc() -> None:
+    global vlc
+    global _VLC_IMPORT_ERROR
+    if vlc is not None or _VLC_IMPORT_ERROR is not None:
+        return
+    try:
+        import vlc as vlc_module  # type: ignore
+    except Exception as exc:  # pragma: no cover - platform-dependent import
+        vlc = None  # type: ignore
+        _VLC_IMPORT_ERROR = exc
+    else:
+        vlc = vlc_module  # type: ignore
+        _VLC_IMPORT_ERROR = None
 
 
 class VlcPlayer:
     """Thin wrapper around python-vlc's MediaPlayer."""
 
     def __init__(self) -> None:
+        _load_vlc()
         if vlc is None:
             raise RuntimeError(
                 "VLC backend is unavailable. Install VLC and the python-vlc package."

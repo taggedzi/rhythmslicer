@@ -15,7 +15,9 @@ def _is_supported(path: Path) -> bool:
 
 
 def save_m3u8(
-    playlist: Playlist, dest: Path, mode: Literal["relative", "absolute", "auto"] = "relative"
+    playlist: Playlist,
+    dest: Path,
+    mode: Literal["relative", "absolute", "auto"] = "relative",
 ) -> None:
     """Save playlist as UTF-8 M3U8."""
     dest.parent.mkdir(parents=True, exist_ok=True)

@@ -22,9 +22,7 @@ def test_m3u_parsing_relative_paths(tmp_path: Path) -> None:
     subdir.mkdir()
     (subdir / "two.wav").write_text("2", encoding="utf-8")
     m3u = tmp_path / "list.m3u"
-    m3u.write_text(
-        "#EXTM3U\n# Comment line\none.mp3\nsub/two.wav\n", encoding="utf-8"
-    )
+    m3u.write_text("#EXTM3U\n# Comment line\none.mp3\nsub/two.wav\n", encoding="utf-8")
     playlist = load_from_m3u(m3u)
     titles = [track.title for track in playlist.tracks]
     assert titles == ["one.mp3", "two.wav"]

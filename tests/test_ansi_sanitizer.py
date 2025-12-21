@@ -6,13 +6,7 @@ from rhythm_slicer.visualizations.ansi import sanitize_ansi_sgr
 
 
 def test_sanitize_ansi_sgr_keeps_only_sgr() -> None:
-    text = (
-        "start\x1b[31mred\x1b[0m"
-        "\x1b[2J"
-        "\x1b]0;title\x07"
-        "\x1b[H"
-        "end"
-    )
+    text = "start\x1b[31mred\x1b[0m\x1b[2J\x1b]0;title\x07\x1b[Hend"
     sanitized = sanitize_ansi_sgr(text)
     assert "\x1b[31m" in sanitized
     assert "\x1b[0m" in sanitized

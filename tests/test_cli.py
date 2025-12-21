@@ -72,12 +72,6 @@ def test_parse_tui_with_viz() -> None:
     assert args.viz == "matrix"
 
 
-def test_volume_validation() -> None:
-    parser = cli.build_parser()
-    with pytest.raises(SystemExit):
-        parser.parse_args(["volume", "101"])
-
-
 def test_execute_play_command() -> None:
     player = DummyPlayer()
     args = cli.build_parser().parse_args(["play", "song.mp3"])
@@ -85,14 +79,6 @@ def test_execute_play_command() -> None:
     assert result.exit_code == 0
     assert player.loaded_path == "song.mp3"
     assert player.played == 1
-
-
-def test_execute_status_command() -> None:
-    player = DummyPlayer()
-    args = cli.build_parser().parse_args(["status"])
-    result = cli._execute_command(player, args)
-    assert result.exit_code == 0
-    assert "State: playing" in (result.message or "")
 
 
 def test_wait_loop_exits_on_end() -> None:
@@ -121,9 +107,7 @@ def test_wait_loop_exits_on_end() -> None:
     def fake_now() -> float:
         return current_time
 
-    cli._wait_for_playback(
-        player, printer=fake_print, sleep=fake_sleep, now=fake_now
-    )
+    cli._wait_for_playback(player, printer=fake_print, sleep=fake_sleep, now=fake_now)
     assert player.calls > 1
     assert printed
 

@@ -12,7 +12,9 @@ VIZ_NAME = "matrix"
 VIZ_TITLE = "Matrix"
 VIZ_DESCRIPTION = "Deterministic green-rain style ASCII columns"
 
-_DEFAULT_CHARSET = "0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz@#$%&*+-/\\|"
+_DEFAULT_CHARSET = (
+    "0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz@#$%&*+-/\\|"
+)
 
 
 def _clamp_float(value: float, low: float, high: float) -> float:
@@ -92,7 +94,7 @@ def generate_frames(ctx: VizContext) -> Iterator[str]:
             lines = ["".join(row).ljust(width) for row in grid]
             while len(lines) < rain_height:
                 lines.append(" " * width)
-            return "\n".join([header] + lines[: rain_height])
+            return "\n".join([header] + lines[:rain_height])
         if height == 1:
             if rain_height == 0:
                 return " " * width

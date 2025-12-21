@@ -1,5 +1,7 @@
 # RhythmSlicer Pro
 
+[![CI](https://github.com/OWNER/REPO/actions/workflows/ci.yml/badge.svg)](https://github.com/OWNER/REPO/actions/workflows/ci.yml)
+
 RhythmSlicer Pro is a cross-platform CLI + Textual TUI music player with
 playlist management and built-in ASCII visualizers powered by the VLC backend.
 
@@ -37,6 +39,15 @@ pip install -e .
 
 ```bash
 r-slicer tui path/to/file.mp3
+```
+
+## Development
+
+```bash
+pip install nox
+nox -s lint
+nox -s tests
+nox -s build
 ```
 
 ## CLI options

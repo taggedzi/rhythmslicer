@@ -181,7 +181,10 @@ def run_generator(
             file=sys.stderr,
         )
         plugin = minimal_viz
-    if getattr(plugin, "VIZ_NAME", None) != viz_name and viz_name != minimal_viz.VIZ_NAME:
+    if (
+        getattr(plugin, "VIZ_NAME", None) != viz_name
+        and viz_name != minimal_viz.VIZ_NAME
+    ):
         print(
             f"warning: viz '{viz_name}' not found; using '{minimal_viz.VIZ_NAME}'",
             file=sys.stderr,

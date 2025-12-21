@@ -34,7 +34,12 @@ from rhythm_slicer.ui.help_modal import HelpModal
 from rhythm_slicer.visualizations.ansi import sanitize_ansi_sgr
 from rhythm_slicer.metadata import format_display_title, get_track_meta
 from rhythm_slicer.player_vlc import VlcPlayer
-from rhythm_slicer.playlist import Playlist, Track, load_from_input, SUPPORTED_EXTENSIONS
+from rhythm_slicer.playlist import (
+    Playlist,
+    Track,
+    load_from_input,
+    SUPPORTED_EXTENSIONS,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -240,14 +245,23 @@ class StatusController:
             focus_id = focused
             if focus_id in {"playlist_list", "playlist_pane"}:
                 return "playlist"
-            if focus_id in {"visualizer", "visualizer_hud", "visuals_pane", "visuals_stack"}:
+            if focus_id in {
+                "visualizer",
+                "visualizer_hud",
+                "visuals_pane",
+                "visuals_stack",
+            }:
                 return "visualizer"
-            if focus_id in {"transport_row", "key_prev", "key_playpause", "key_stop", "key_next"}:
+            if focus_id in {
+                "transport_row",
+                "key_prev",
+                "key_playpause",
+                "key_stop",
+                "key_next",
+            }:
                 return "transport"
             return "general"
-        if self._focus_has_id(
-            focused, {"playlist_list", "playlist_pane"}
-        ):
+        if self._focus_has_id(focused, {"playlist_list", "playlist_pane"}):
             return "playlist"
         if self._focus_has_id(
             focused,
@@ -345,9 +359,7 @@ class RhythmSlicerApp(App):
         self._rng = rng or random.Random()
         self._last_playlist_path: Optional[Path] = None
         self._last_open_path: Optional[Path] = (
-            Path(config.last_open_path)
-            if config.last_open_path
-            else None
+            Path(config.last_open_path) if config.last_open_path else None
         )
         self._open_recursive = config.open_recursive
         self._status_controller = StatusController(self._now)
@@ -383,10 +395,20 @@ class RhythmSlicerApp(App):
                             yield Button("R:OFF", id="repeat_toggle")
                             yield Button("S:OFF", id="shuffle_toggle")
                         yield Horizontal(
-                            Button(Text("[<<]"), id="key_prev", classes="transport_key"),
-                            Button(Text("[ PLAY ] "), id="key_playpause", classes="transport_key"),
-                            Button(Text("[ STOP ]"), id="key_stop", classes="transport_key"),
-                            Button(Text("[>>]"), id="key_next", classes="transport_key"),
+                            Button(
+                                Text("[<<]"), id="key_prev", classes="transport_key"
+                            ),
+                            Button(
+                                Text("[ PLAY ] "),
+                                id="key_playpause",
+                                classes="transport_key",
+                            ),
+                            Button(
+                                Text("[ STOP ]"), id="key_stop", classes="transport_key"
+                            ),
+                            Button(
+                                Text("[>>]"), id="key_next", classes="transport_key"
+                            ),
                             id="transport_row",
                         )
                 with Container(id="visuals_pane"):
@@ -468,7 +490,9 @@ class RhythmSlicerApp(App):
             self._visualizer.update(self._render_visualizer())
         self._visualizer_ready = True
         logger.info(
-            "Visualizer layout ready (%sx%s)", self._viewport_width, self._viewport_height
+            "Visualizer layout ready (%sx%s)",
+            self._viewport_width,
+            self._viewport_height,
         )
 
     def _start_hang_watchdog(self) -> None:
@@ -515,9 +539,7 @@ class RhythmSlicerApp(App):
 
     def _save_config(self) -> None:
         self._config = AppConfig(
-            last_open_path=str(self._last_open_path)
-            if self._last_open_path
-            else None,
+            last_open_path=str(self._last_open_path) if self._last_open_path else None,
             open_recursive=self._open_recursive,
             volume=self._volume,
             repeat_mode=self._repeat_mode,
@@ -571,7 +593,6 @@ class RhythmSlicerApp(App):
             self.action_stop()
         elif control_id == "key_next":
             self.action_next_track()
-
 
     def _on_tick(self) -> None:
         self._progress_tick += 1
@@ -1015,7 +1036,9 @@ class RhythmSlicerApp(App):
         selected_index = self.playlist.index
         removed_track = self.playlist.tracks[selected_index]
         playing_index = (
-            self._playing_index if self._playing_index is not None else self.playlist.index
+            self._playing_index
+            if self._playing_index is not None
+            else self.playlist.index
         )
         was_playing = selected_index == playing_index
         self.playlist.remove(selected_index)
@@ -1057,9 +1080,7 @@ class RhythmSlicerApp(App):
 
     async def _select_visualization_flow(self) -> None:
         choices = self._list_visualizations()
-        result = await self.push_screen_wait(
-            VizPrompt(self._viz_name, choices)
-        )
+        result = await self.push_screen_wait(VizPrompt(self._viz_name, choices))
         if not result:
             return
         selection = result.strip()
@@ -1239,20 +1260,13 @@ class RhythmSlicerApp(App):
         sy = getattr(event, "screen_y", event.y)
         if region and not region.contains(sx, sy):
             return
-        row = (
-            int(sy - region.y)
-            if region
-            else int(getattr(event, "offset_y", event.y))
-        )
+        row = int(sy - region.y) if region else int(getattr(event, "offset_y", event.y))
         index = self._row_to_index(row)
         if index is None:
             return
         self.set_focus(self._playlist_list)
         now = self._now()
-        if (
-            self._last_click_index == index
-            and now - self._last_click_time <= 0.4
-        ):
+        if self._last_click_index == index and now - self._last_click_time <= 0.4:
             self._set_selected(index)
             self._play_selected()
         else:
@@ -1289,7 +1303,6 @@ class RhythmSlicerApp(App):
             self._set_message("Visualizer restarted (resize)")
         elif self._visualizer and not self._frame_player.is_running:
             self._visualizer.update(self._render_visualizer())
-
 
     def on_mouse_scroll_down(self, event: events.MouseScrollDown) -> None:
         if not self._playlist_list:
@@ -1432,7 +1445,9 @@ class RhythmSlicerApp(App):
         path_str, recursive = _parse_open_prompt_result(result)
         await self._handle_open_path(path_str, recursive=recursive)
 
-    async def _handle_open_path(self, path_str: str, *, recursive: bool = False) -> None:
+    async def _handle_open_path(
+        self, path_str: str, *, recursive: bool = False
+    ) -> None:
         path = Path(path_str).expanduser()
         if not path.exists():
             self._set_message("Path not found", level="warn")
@@ -1599,9 +1614,7 @@ class RhythmSlicerApp(App):
         for module_info in pkgutil.iter_modules(package.__path__):
             name = module_info.name
             try:
-                module = importlib.import_module(
-                    f"rhythm_slicer.visualizations.{name}"
-                )
+                module = importlib.import_module(f"rhythm_slicer.visualizations.{name}")
             except Exception:
                 continue
             viz_name = getattr(module, "VIZ_NAME", None)
