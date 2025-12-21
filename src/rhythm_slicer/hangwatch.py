@@ -6,9 +6,9 @@ import faulthandler
 import threading
 import time
 from pathlib import Path
-from typing import Callable, Optional
+from typing import Callable, Optional, TextIO
 
-_HANG_FILE: Optional[object] = None
+_HANG_FILE: Optional[TextIO] = None
 _HANG_PATH: Optional[Path] = None
 _LOCK = threading.Lock()
 

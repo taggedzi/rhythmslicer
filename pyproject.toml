@@ -25,7 +25,8 @@ dev = [
   "mypy>=1.0",
   "nox>=2024.0",
   "pytest>=7.0",
-  "ruff>=0.0.0"
+  "ruff>=0.0.0",
+  "mypy>=1.0.0"
 ]
 
 [project.scripts]
@@ -42,3 +43,10 @@ omit = ["src/rhythm_slicer/tui.py"]
 [tool.coverage.report]
 fail_under = 80
 show_missing = true
+
+[tool.mypy]
+python_version = "3.9"
+ignore_missing_imports = true
+show_error_codes = true
+warn_unused_configs = true
+files = ["src/rhythm_slicer"]

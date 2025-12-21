@@ -8,7 +8,8 @@ import time
 import logging
 import threading
 from dataclasses import dataclass
-from typing import Callable, Iterable, Optional
+from typing import Callable, Iterable, Optional, Literal, Tuple
+from types import TracebackType
 from pathlib import Path
 
 from rhythm_slicer.player_vlc import VlcPlayer
@@ -136,7 +137,9 @@ def _execute_command(player: VlcPlayer, args: argparse.Namespace) -> CommandResu
         if args.playlist_cmd == "save":
             if playlist.is_empty():
                 return CommandResult(1, "No tracks to save")
-            mode = "absolute" if args.absolute else "auto"
+            mode: Literal["relative", "absolute", "auto"] = (
+                "absolute" if args.absolute else "auto"
+            )
             save_m3u8(playlist, Path(args.dest), mode=mode)
             return CommandResult(
                 0, f"Saved {len(playlist.tracks)} tracks to {args.dest}"
@@ -174,10 +177,16 @@ def main(argv: Optional[Iterable[str]] = None) -> int:
     if hasattr(threading, "excepthook"):
 
         def thread_hook(args: threading.ExceptHookArgs) -> None:
-            exc_info = (args.exc_type, args.exc_value, args.exc_traceback)
-            logger.exception(
-                "Thread exception in %s", args.thread.name, exc_info=exc_info
+            exc_value = args.exc_value or RuntimeError("unknown")
+            exc_info: Tuple[
+                type[BaseException], BaseException, Optional[TracebackType]
+            ] = (
+                args.exc_type,
+                exc_value,
+                args.exc_traceback,
             )
+            thread_name = args.thread.name if args.thread else "thread"
+            logger.exception("Thread exception in %s", thread_name, exc_info=exc_info)
 
         threading.excepthook = thread_hook
 

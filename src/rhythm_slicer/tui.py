@@ -1382,11 +1382,17 @@ class RhythmSlicerApp(App):
     def _default_save_path(self) -> Path:
         if self._last_playlist_path:
             return self._last_playlist_path
-        if self.playlist and self.playlist.current():
-            return self.playlist.current().path.parent / "playlist.m3u8"
+        if self.playlist:
+            current = self.playlist.current()
+            if current:
+                return current.path.parent / "playlist.m3u8"
         return Path.cwd() / "playlist.m3u8"
 
     async def _save_playlist_flow(self) -> None:
+        playlist = self.playlist
+        if playlist is None:
+            self._set_message("Playlist is empty", level="warn")
+            return
         default_path = self._default_save_path()
         result = await self.push_screen_wait(
             PlaylistPrompt(
@@ -1403,7 +1409,7 @@ class RhythmSlicerApp(App):
         try:
             from rhythm_slicer.playlist_io import save_m3u8
 
-            save_m3u8(self.playlist, dest, mode="absolute" if absolute else "auto")
+            save_m3u8(playlist, dest, mode="absolute" if absolute else "auto")
         except Exception as exc:
             logger.exception("Save playlist failed: %s", dest)
             self._set_message(f"Save failed: {exc}", level="error")
@@ -1428,7 +1434,8 @@ class RhythmSlicerApp(App):
         if new_playlist.is_empty():
             self._set_message("Playlist is empty", level="warn")
             return
-        preserve = self.playlist.current().path if self.playlist else None
+        preserve_track = self.playlist.current() if self.playlist else None
+        preserve = preserve_track.path if preserve_track else None
         await self.set_playlist(new_playlist, preserve_path=preserve)
         self._last_playlist_path = path
         if not self._play_current_track():

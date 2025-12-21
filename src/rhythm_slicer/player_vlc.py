@@ -2,11 +2,11 @@
 
 from __future__ import annotations
 
-from typing import Optional
+from typing import Any, Optional, cast
 import threading
 
-vlc = None  # type: ignore
-_VLC_IMPORT_ERROR = None
+vlc: Any | None = None
+_VLC_IMPORT_ERROR: Optional[Exception] = None
 
 
 def _load_vlc() -> None:
@@ -17,10 +17,10 @@ def _load_vlc() -> None:
     try:
         import vlc as vlc_module  # type: ignore
     except Exception as exc:  # pragma: no cover - platform-dependent import
-        vlc = None  # type: ignore
+        vlc = None
         _VLC_IMPORT_ERROR = exc
     else:
-        vlc = vlc_module  # type: ignore
+        vlc = cast(Any, vlc_module)
         _VLC_IMPORT_ERROR = None
 
 
@@ -33,17 +33,20 @@ class VlcPlayer:
             raise RuntimeError(
                 "VLC backend is unavailable. Install VLC and the python-vlc package."
             ) from _VLC_IMPORT_ERROR
-        self._instance = vlc.Instance()
+        self._instance = cast(Any, vlc).Instance()
         self._player = self._instance.media_player_new()
         self._current_media: Optional[str] = None
         self._end_reached = threading.Event()
         self._attach_end_reached_event()
 
     def _attach_end_reached_event(self) -> None:
+        if vlc is None:
+            return
+        vlc_module = cast(Any, vlc)
         try:
             event_manager = self._player.event_manager()
             event_manager.event_attach(
-                vlc.EventType.MediaPlayerEndReached, self._handle_end_reached
+                vlc_module.EventType.MediaPlayerEndReached, self._handle_end_reached
             )
         except Exception:
             return

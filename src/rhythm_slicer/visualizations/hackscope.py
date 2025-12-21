@@ -7,7 +7,7 @@ from pathlib import Path
 import os
 import random
 import re
-from typing import Iterator
+from typing import Iterator, Union, cast
 
 from rhythm_slicer.visualizations.host import VizContext
 
@@ -58,14 +58,14 @@ def _meta_int(meta: dict, key: str) -> int | None:
 
 def _safe_int(value: object, default: int) -> int:
     try:
-        return int(value)
+        return int(cast(Union[str, float, int], value))
     except Exception:
         return default
 
 
 def _safe_float(value: object, default: float) -> float:
     try:
-        return float(value)
+        return float(cast(Union[str, float, int], value))
     except Exception:
         return default
 
@@ -244,9 +244,9 @@ def render_ambient(
         lines[scan_row] = "." * width
     blink = (global_frame // 10) % 2
     if blink == 1 and height > 0 and width > 0:
-        row = list(lines[-1])
-        row[0] = "_"
-        lines[-1] = "".join(row)
+        blink_row = list(lines[-1])
+        blink_row[0] = "_"
+        lines[-1] = "".join(blink_row)
     return lines
 
 
@@ -328,11 +328,13 @@ def _allocate_phases(
     # Adjust to exact total
     current_total = sum(allocation.values())
     while current_total < total_frames:
-        name = max(weights, key=weights.get) if weights else phases[0][0]
+        name = (
+            max(weights, key=lambda n: weights.get(n, 0)) if weights else phases[0][0]
+        )
         allocation[name] = allocation.get(name, 0) + 1
         current_total += 1
     while current_total > total_frames and allocation:
-        name = max(allocation, key=allocation.get)
+        name = max(allocation, key=lambda n: allocation.get(n, 0))
         if allocation[name] > 1:
             allocation[name] -= 1
             current_total -= 1

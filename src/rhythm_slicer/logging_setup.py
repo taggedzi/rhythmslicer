@@ -54,7 +54,7 @@ def init_logging(app_name: str = "rhythm_slicer") -> Path:
         ):
             logger.addHandler(stream_handler)
     except Exception:
-        logging.basicConfig(level=level, format=formatter._fmt)
+        logging.basicConfig(level=level, format=str(formatter._fmt))
 
     logging.getLogger(app_name).info("Logging initialized at %s", log_path)
     return log_path
