@@ -11,39 +11,109 @@ $transport_bg: #070a0f;
 
 Screen {
     layout: vertical;
-    border: round $accent;
-    border-title-color: $amber;
+    border: none;
+    padding: 0;
     background: $bg;
     color: $text;
 }
 
-#main {
-    layout: horizontal;
-    height: 1fr;
-    width: 100%;
+Header {
+    background: $bg;
+    color: $text;
+    height: 1;
 }
 
+#root {
+    layout: vertical;
+    width: 100%;
+    height: 1fr;
+    padding: 0;
+}
 
-#playlist_pane {
+#too_small {
+    display: none;
+    width: 100%;
+    height: 1fr;
+    content-align: center middle;
+    color: $amber;
+    background: $bg;
+}
+
+#body {
+    layout: horizontal;
+    width: 100%;
+    height: 1fr;
+}
+
+#playlist_panel {
     width: 1fr;
-    min-width: 24;
+    min-width: 41;
     height: 1fr;
     border: round $cyan;
     border-title-color: $cyan;
     background: $panelA;
+    padding: 0;
+}
+
+#playlist_stack {
+    width: 100%;
+    height: 100%;
+}
+
+#transport_controls {
+    height: 1;
+    width: 100%;
     padding: 0 1;
+    align: left middle;
+    background: $transport_bg;
 }
 
-#visuals_pane {
-    width: 1fr;
-    min-width: 24;
+.transport_button {
+    height: 1;
+    padding: 0 1;
+    margin: 0 1 0 0;
+    border: none;
+    background: #0b1017;
+    color: $cyan_dim;
+    min-width: 6;
+    content-align: center middle;
+}
+
+.transport_button:hover,
+.transport_button:focus {
+    background: #111826;
+    color: $cyan;
+}
+
+#playlist_table {
+    width: 100%;
     height: 1fr;
+}
+
+#legacy_controls {
+    display: none;
+}
+
+#right_column {
+    width: 1fr;
+    min-width: 20;
+    height: 1fr;
+}
+
+#visualizer_panel {
+    height: 1fr;
+    border: round $magenta;
+    border-title-color: $magenta;
     background: $panelB;
+    padding: 0;
 }
 
-#visuals_stack {
-    width: 1fr;
+#track_panel {
     height: 1fr;
+    border: round $cyan_dim;
+    border-title-color: $cyan_dim;
+    background: $panelA;
+    padding: 0;
 }
 
 #playlist_list {
@@ -86,21 +156,26 @@ Screen {
 #visualizer {
     height: 1fr;
     width: 1fr;
-    border: heavy $magenta;
-    border-title-color: $magenta;
     text-style: bold;
     content-align: center middle;
     background: $panelB;
 }
 
 #visualizer_hud {
-    height: 4;
-    width: 1fr;
+    height: 1fr;
+    width: 100%;
     padding: 0 1;
     text-wrap: nowrap;
     content-align: left top;
-    background: $panelA;
     color: $text_dim;
+}
+
+#status_panel {
+    height: 4;
+    border: round $amber;
+    border-title-color: $amber;
+    background: $panelA;
+    padding: 0 1;
 }
 
 #status {

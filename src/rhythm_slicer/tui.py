@@ -19,8 +19,16 @@ try:
     from textual.containers import Container, Horizontal, Vertical
     from textual import events
     from textual.screen import ModalScreen
-    from textual.widgets import Button, Input, Static
+    from textual.widgets import Button, DataTable, Header, Input, Static
     from rich.text import Text
+    try:
+        from textual.widgets import Panel
+    except Exception:
+        class Panel(Container):
+            def __init__(self, *children: object, title: str | None = None, **kwargs: object) -> None:
+                super().__init__(*children, **kwargs)
+                if title:
+                    self.border_title = title
 except Exception as exc:  # pragma: no cover - depends on environment
     raise RuntimeError(
         "Textual is required for the TUI. Install the 'textual' dependency."
@@ -167,6 +175,40 @@ class VisualizerHud(Static):
     """Compact HUD for the visualizer pane."""
 
 
+class TransportControls(Static):
+    """Transport controls for the playlist pane."""
+
+    def compose(self) -> ComposeResult:
+        with Horizontal(id="transport_controls"):
+            yield Button("Prev", id="transport_prev", classes="transport_button")
+            yield Button("Play", id="transport_playpause", classes="transport_button")
+            yield Button("Stop", id="transport_stop", classes="transport_button")
+            yield Button("Next", id="transport_next", classes="transport_button")
+
+    def on_mount(self) -> None:
+        self.set_interval(0.25, self._refresh_label)
+        self._refresh_label()
+
+    def on_button_pressed(self, event: Button.Pressed) -> None:
+        control_id = event.button.id
+        if control_id == "transport_prev":
+            self.app.action_previous_track()
+        elif control_id == "transport_playpause":
+            self.app.action_toggle_playback()
+        elif control_id == "transport_stop":
+            self.app.action_stop()
+        elif control_id == "transport_next":
+            self.app.action_next_track()
+
+    def _refresh_label(self) -> None:
+        try:
+            label = self.query_one("#transport_playpause", Button)
+        except Exception:
+            return
+        state = (self.app.player.get_state() or "").lower()
+        label.label = "Pause" if "playing" in state else "Play"
+
+
 @dataclass
 class StatusMessage:
     text: str
@@ -243,13 +285,14 @@ class StatusController:
             return "general"
         if isinstance(focused, str):
             focus_id = focused
-            if focus_id in {"playlist_list", "playlist_pane"}:
+            if focus_id in {"playlist_list", "playlist_table", "playlist_panel"}:
                 return "playlist"
             if focus_id in {
                 "visualizer",
                 "visualizer_hud",
-                "visuals_pane",
-                "visuals_stack",
+                "visualizer_panel",
+                "track_panel",
+                "right_column",
             }:
                 return "visualizer"
             if focus_id in {
@@ -261,11 +304,11 @@ class StatusController:
             }:
                 return "transport"
             return "general"
-        if self._focus_has_id(focused, {"playlist_list", "playlist_pane"}):
+        if self._focus_has_id(focused, {"playlist_list", "playlist_table", "playlist_panel"}):
             return "playlist"
         if self._focus_has_id(
             focused,
-            {"visualizer", "visualizer_hud", "visuals_pane", "visuals_stack"},
+            {"visualizer", "visualizer_hud", "visualizer_panel", "track_panel", "right_column"},
         ):
             return "visualizer"
         if self._focus_has_id(
@@ -301,6 +344,11 @@ class RhythmSlicerApp(App):
     """RhythmSlicer Pro Textual application."""
 
     CSS_PATH = "app.tcss"
+    TITLE = "Rhythm Slicer Pro"
+    MIN_WIDTH = 41
+    MIN_HEIGHT = 12
+    HIDE_TRACK_WIDTH = 80
+    HIDE_VISUALIZER_WIDTH = 60
 
     BINDINGS = [
         Binding("space", "toggle_playback", "Play/Pause"),
@@ -367,8 +415,9 @@ class RhythmSlicerApp(App):
         self._visualizer: Optional[Static] = None
         self._visualizer_hud: Optional[Static] = None
         self._playlist_list: Optional[Static] = None
+        self._playlist_table: Optional[DataTable] = None
         self._progress: Optional[Static] = None
-        self._status: Optional[StatusBar] = None
+        self._status: Optional[Static] = None
         self._progress_tick = 0
         self._frame_player = FramePlayer(self)
         self._current_track_path: Optional[Path] = None
@@ -381,53 +430,64 @@ class RhythmSlicerApp(App):
         self._visualizer_init_attempts = 0
         self._last_ui_tick = self._now()
         self._hang_watchdog: Optional[HangWatchdog] = None
+        self._too_small_active = False
 
     def compose(self) -> ComposeResult:
-        with Vertical():
-            with Container(id="main"):
-                with Container(id="playlist_pane"):
-                    with Vertical():
-                        yield Static(id="playlist_list", markup=True)
-                        with Horizontal(id="playlist_footer"):
-                            yield Static(id="playlist_footer_track")
-                            yield Button("R:OFF", id="repeat_toggle")
-                            yield Button("S:OFF", id="shuffle_toggle")
-                        yield Horizontal(
-                            Button(
-                                Text("[<<]"), id="key_prev", classes="transport_key"
-                            ),
-                            Button(
-                                Text("[ PLAY ] "),
-                                id="key_playpause",
-                                classes="transport_key",
-                            ),
-                            Button(
-                                Text("[ STOP ]"), id="key_stop", classes="transport_key"
-                            ),
-                            Button(
-                                Text("[>>]"), id="key_next", classes="transport_key"
-                            ),
-                            id="transport_row",
-                        )
-                with Container(id="visuals_pane"):
-                    with Vertical(id="visuals_stack"):
+        yield Header(show_clock=False)
+        with Container(id="root"):
+            yield Static(
+                "Terminal too small (min 41x12)",
+                id="too_small",
+            )
+            with Horizontal(id="body"):
+                with Panel(title="Playlist", id="playlist_panel"):
+                    with Vertical(id="playlist_stack"):
+                        yield DataTable(id="playlist_table")
+                        yield TransportControls()
+                        with Container(id="legacy_controls"):
+                            yield Static(id="playlist_list", markup=True)
+                            with Horizontal(id="playlist_footer"):
+                                yield Static(id="playlist_footer_track")
+                                yield Button("R:OFF", id="repeat_toggle")
+                                yield Button("S:OFF", id="shuffle_toggle")
+                            yield Horizontal(
+                                Button(
+                                    Text("[<<]"), id="key_prev", classes="transport_key"
+                                ),
+                                Button(
+                                    Text("[ PLAY ] "),
+                                    id="key_playpause",
+                                    classes="transport_key",
+                                ),
+                                Button(
+                                    Text("[ STOP ]"),
+                                    id="key_stop",
+                                    classes="transport_key",
+                                ),
+                                Button(
+                                    Text("[>>]"), id="key_next", classes="transport_key"
+                                ),
+                                id="transport_row",
+                            )
+                with Vertical(id="right_column"):
+                    with Panel(title="Visualizer", id="visualizer_panel"):
                         yield Static(id="visualizer")
+                    with Panel(title="Current Track", id="track_panel"):
                         yield VisualizerHud(id="visualizer_hud")
-            yield Static(id="progress")
-            yield StatusBar(self._status_controller, id="status")
+            with Panel(title="Status", id="status_panel"):
+                yield Static(id="progress", markup=False)
+                yield Static(id="status", markup=False)
 
     async def on_mount(self) -> None:
         self._update_screen_title()
         self._visualizer = self.query_one("#visualizer", Static)
         self._visualizer_hud = self.query_one("#visualizer_hud", Static)
         self._playlist_list = self.query_one("#playlist_list", Static)
+        self._playlist_table = self.query_one("#playlist_table", DataTable)
         self._playlist_list.can_focus = True
-        playlist_pane = self.query_one("#playlist_pane", Container)
-        playlist_pane.border_title = "Playlist"
         self._progress = self.query_one("#progress", Static)
-        self._status = self.query_one("#status", StatusBar)
-        if self._visualizer:
-            self._visualizer.border_title = "Visualizer"
+        self._status = self.query_one("#status", Static)
+        self._init_playlist_table()
         self._update_visualizer_hud()
         self._update_visualizer_viewport()
         self._install_asyncio_exception_handler()
@@ -448,13 +508,14 @@ class RhythmSlicerApp(App):
                 self._skip_failed_track()
         else:
             self._set_message("No tracks loaded")
-        if self._playlist_list:
-            self.set_focus(self._playlist_list)
+        if self._playlist_table:
+            self.set_focus(self._playlist_table)
         self._update_transport_row()
         self.set_interval(0.1, self._on_tick)
         self.set_interval(0.5, self._update_ui_tick)
         self.set_interval(10.0, self._log_heartbeat)
         self.call_later(self._finalize_visualizer_layout)
+        self._apply_layout_constraints()
         logger.info("TUI mounted")
 
     def _install_asyncio_exception_handler(self) -> None:
@@ -551,7 +612,16 @@ class RhythmSlicerApp(App):
         if not self._status:
             return Text("")
         max_width = max(1, self._status.size.width)
-        return self._status_controller.render_line(max_width, focused=self.focused)
+        message = self._status_controller._current_message()
+        if message:
+            line = _truncate_line(message.text, max_width)
+            style = None
+            if message.level == "warn":
+                style = "#ffcc66"
+            elif message.level == "error":
+                style = "#ff5f52"
+            return Text(line, style=style) if style else Text(line)
+        return Text(_truncate_line(self._render_volume_line(max_width), max_width))
 
     def _render_modes(self) -> str:
         mode_map = {"off": "OFF", "one": "ONE", "all": "ALL"}
@@ -616,10 +686,7 @@ class RhythmSlicerApp(App):
         return "<< Rhythm Slicer Pro >>"
 
     def _update_screen_title(self) -> None:
-        try:
-            self.screen.border_title = self._render_header()
-        except Exception:
-            return
+        self.title = "Rhythm Slicer Pro"
 
     def _render_visualizer(self) -> str:
         width, height = self._visualizer_viewport()
@@ -706,16 +773,48 @@ class RhythmSlicerApp(App):
             return ""
         size = getattr(self._progress, "size", None)
         width = max(1, getattr(size, "width", 1) if size else 1)
+        position = _format_time_ms(self.player.get_position_ms()) or "--:--"
+        length_label = _format_time_ms(self.player.get_length_ms()) or "--:--"
+        timing = f"{position}/{length_label}"
+        prefix = "TIME: "
+        suffix = f" {timing}"
+        bar_width = max(1, width - len(prefix) - len(suffix) - 2)
         length = self.player.get_length_ms()
         if not length or length <= 0:
-            bar = ["-"] * width
-            pulse = self._progress_tick % max(1, width)
+            bar = ["-"] * bar_width
+            pulse = self._progress_tick % max(1, bar_width)
             bar[pulse] = "="
-            return "".join(bar)
+            line = f"{prefix}[{''.join(bar)}]{suffix}"
+            return _truncate_line(line, width)
         position = self.player.get_position_ms() or 0
         ratio = min(1.0, max(0.0, position / float(length)))
-        filled = int(ratio * width)
-        return "=" * filled + "-" * max(0, width - filled)
+        filled = int(ratio * bar_width)
+        bar = "=" * filled + "-" * max(0, bar_width - filled)
+        line = f"{prefix}[{bar}]{suffix}"
+        return _truncate_line(line, width)
+
+    def _render_volume_line(self, width: int) -> str:
+        prefix = "VOL: "
+        state = _display_state(self.player.get_state()).upper()
+        suffix = f" {self._volume:3d} [{state}]"
+        bar_width = max(1, width - len(prefix) - len(suffix) - 2)
+        filled = int(bar_width * max(0, min(self._volume, 100)) / 100.0)
+        bar = "=" * filled + "-" * max(0, bar_width - filled)
+        line = f"{prefix}[{bar}]{suffix}"
+        return _truncate_line(line, width)
+
+    def _init_playlist_table(self) -> None:
+        if not self._playlist_table:
+            return
+        self._playlist_table.clear(columns=True)
+        self._playlist_table.add_columns("Title", "Artist")
+        for idx in range(1, 11):
+            self._playlist_table.add_row(
+                f"Song Title {idx:02d} - Long Placeholder Name",
+                "Artist",
+            )
+        self._playlist_table.cursor_type = "row"
+        self._playlist_table.show_cursor = True
 
     async def _populate_playlist(self) -> None:
         if not self._playlist_list or self.playlist is None:
@@ -1020,7 +1119,11 @@ class RhythmSlicerApp(App):
             focused = self.focused
         except Exception:
             focused = self._playlist_list
-        if focused is not None and focused is not self._playlist_list:
+        if (
+            focused is not None
+            and focused is not self._playlist_list
+            and focused is not self._playlist_table
+        ):
             return
         self._play_selected()
 
@@ -1293,6 +1396,9 @@ class RhythmSlicerApp(App):
 
     def on_resize(self, event: events.Resize) -> None:
         del event
+        self._apply_layout_constraints()
+        if self._too_small_active:
+            return
         self._update_visualizer_viewport()
         self._update_playlist_view()
         self._update_visualizer_hud()
@@ -1330,6 +1436,28 @@ class RhythmSlicerApp(App):
         self._scroll_offset = max(0, self._scroll_offset - 1)
         self._update_playlist_view()
         event.stop()
+
+    def _apply_layout_constraints(self) -> None:
+        width = max(0, self.size.width)
+        height = max(0, self.size.height)
+        too_small = width < self.MIN_WIDTH or height < self.MIN_HEIGHT
+        self._too_small_active = too_small
+        body = self.query_one("#body", Horizontal)
+        status_panel = self.query_one("#status_panel", Panel)
+        too_small_widget = self.query_one("#too_small", Static)
+        body.styles.display = "none" if too_small else "block"
+        status_panel.styles.display = "none" if too_small else "block"
+        too_small_widget.styles.display = "block" if too_small else "none"
+        if too_small:
+            return
+        show_track = width >= self.HIDE_TRACK_WIDTH
+        show_visualizer = width >= self.HIDE_VISUALIZER_WIDTH
+        track_panel = self.query_one("#track_panel", Panel)
+        visualizer_panel = self.query_one("#visualizer_panel", Panel)
+        right_column = self.query_one("#right_column", Vertical)
+        track_panel.styles.display = "block" if show_track else "none"
+        visualizer_panel.styles.display = "block" if show_visualizer else "none"
+        right_column.styles.display = "block" if show_visualizer else "none"
 
     def _reset_play_order(self) -> None:
         if not self.playlist or self.playlist.is_empty():
