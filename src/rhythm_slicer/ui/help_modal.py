@@ -65,7 +65,13 @@ def _format_key(key: str) -> str:
     if key in key_map:
         return key_map[key]
     parts = key.split("+")
-    return "+".join(part.capitalize() if len(part) > 1 else part for part in parts)
+    formatted: list[str] = []
+    for part in parts:
+        if len(part) == 1:
+            formatted.append(part.upper())
+        else:
+            formatted.append(part.capitalize())
+    return "+".join(formatted)
 
 
 def build_help_text(bindings: Iterable[Binding]) -> Text:

@@ -1053,6 +1053,9 @@ class RhythmSlicerApp(App):
         self._save_config()
 
     async def action_select_visualization(self) -> None:
+        self.run_worker(self._select_visualization_flow(), exclusive=True)
+
+    async def _select_visualization_flow(self) -> None:
         choices = self._list_visualizations()
         result = await self.push_screen_wait(
             VizPrompt(self._viz_name, choices)
