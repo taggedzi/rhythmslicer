@@ -30,6 +30,7 @@ from rhythm_slicer.config import AppConfig, load_config, save_config
 from rhythm_slicer.hackscript import HackFrame, generate as generate_hackscript
 from rhythm_slicer.hangwatch import HangWatchdog, dump_threads
 from rhythm_slicer.logging_setup import set_console_level
+from rhythm_slicer.ui.help_modal import HelpModal
 from rhythm_slicer.visualizations.ansi import sanitize_ansi_sgr
 from rhythm_slicer.metadata import format_display_title, get_track_meta
 from rhythm_slicer.player_vlc import VlcPlayer
@@ -306,6 +307,8 @@ class RhythmSlicerApp(App):
         Binding("ctrl+s", "save_playlist", "Save Playlist"),
         Binding("ctrl+o", "open", "Open"),
         Binding("ctrl+shift+d", "dump_threads", "Dump Threads"),
+        Binding("?", "show_help", "Help"),
+        Binding("f1", "show_help", "Help"),
         Binding("q", "quit_app", "Quit"),
     ]
 
@@ -963,6 +966,9 @@ class RhythmSlicerApp(App):
         self._set_message("Dumping threads")
         logger.info("Manual thread dump requested")
         dump_threads("manual dump")
+
+    def action_show_help(self) -> None:
+        self.push_screen(HelpModal(self.BINDINGS))
 
     def on_shutdown(self) -> None:
         logger.info("TUI shutdown")
