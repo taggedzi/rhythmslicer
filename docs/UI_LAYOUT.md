@@ -276,3 +276,32 @@ The UI will NOT:
 > If it requires more, it does not belong in the default UI.
 
 This document is the single source of truth for TUI layout behavior.
+
+## 16. Transport Control Semantics
+
+### Play / Pause Toggle
+
+- PLAY and PAUSE are represented by a **single toggle control**
+- Only one label is visible at any time
+- The label reflects the **action that will occur when activated**
+
+#### State-to-Label Mapping
+
+| Player State | Button Label |
+|-------------|--------------|
+| Playing     | PAUSE |
+| Paused      | PLAY |
+| Stopped     | PLAY |
+
+### Behavior Guarantees
+
+- The control never changes width or position
+- Activating the control immediately:
+  1. Changes playback state
+  2. Updates the button label
+  3. Updates the player state indicator
+
+### Input Consistency
+
+- Keyboard and mouse activation are equivalent
+- No interaction method may bypass state synchronization
