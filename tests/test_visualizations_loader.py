@@ -38,7 +38,9 @@ def test_minimal_frames_match_dimensions() -> None:
 
 
 def test_loader_uses_entry_point_select(monkeypatch) -> None:
-    plugin = SimpleNamespace(VIZ_NAME="custom", generate_frames=lambda ctx: iter(["ok"]))
+    plugin = SimpleNamespace(
+        VIZ_NAME="custom", generate_frames=lambda ctx: iter(["ok"])
+    )
 
     class _EntryPoint:
         name = "custom"

@@ -192,7 +192,13 @@ def test_execute_playlist_save(monkeypatch, tmp_path: Path) -> None:
     monkeypatch.setattr(cli, "load_from_input", fake_load)
     monkeypatch.setattr(cli, "save_m3u8", fake_save)
     args = cli.build_parser().parse_args(
-        ["playlist", "save", str(tmp_path / "out.m3u8"), "--from", str(tmp_path / "input.m3u8")]
+        [
+            "playlist",
+            "save",
+            str(tmp_path / "out.m3u8"),
+            "--from",
+            str(tmp_path / "input.m3u8"),
+        ]
     )
     result = cli._execute_command(DummyPlayer(), args)
     assert result.exit_code == 0
@@ -202,7 +208,13 @@ def test_execute_playlist_save(monkeypatch, tmp_path: Path) -> None:
 def test_execute_playlist_save_empty(monkeypatch, tmp_path: Path) -> None:
     monkeypatch.setattr(cli, "load_from_input", lambda _: Playlist([]))
     args = cli.build_parser().parse_args(
-        ["playlist", "save", str(tmp_path / "out.m3u8"), "--from", str(tmp_path / "input.m3u8")]
+        [
+            "playlist",
+            "save",
+            str(tmp_path / "out.m3u8"),
+            "--from",
+            str(tmp_path / "input.m3u8"),
+        ]
     )
     result = cli._execute_command(DummyPlayer(), args)
     assert result.exit_code == 1
