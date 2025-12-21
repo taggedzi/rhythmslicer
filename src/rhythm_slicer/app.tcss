@@ -12,13 +12,9 @@ $transport_bg: #070a0f;
 Screen {
     layout: vertical;
     border: round $accent;
+    border-title-color: $amber;
     background: $bg;
     color: $text;
-}
-
-#header {
-    height: 1;
-    content-align: left middle;
 }
 
 #main {

@@ -364,7 +364,6 @@ class RhythmSlicerApp(App):
         self._open_recursive = config.open_recursive
         self._status_controller = StatusController(self._now)
         self._playing_index: Optional[int] = None
-        self._header: Optional[Static] = None
         self._visualizer: Optional[Static] = None
         self._visualizer_hud: Optional[Static] = None
         self._playlist_list: Optional[Static] = None
@@ -385,7 +384,6 @@ class RhythmSlicerApp(App):
 
     def compose(self) -> ComposeResult:
         with Vertical():
-            yield Static(id="header")
             with Container(id="main"):
                 with Container(id="playlist_pane"):
                     with Vertical():
@@ -419,7 +417,7 @@ class RhythmSlicerApp(App):
             yield StatusBar(self._status_controller, id="status")
 
     async def on_mount(self) -> None:
-        self._header = self.query_one("#header", Static)
+        self._update_screen_title()
         self._visualizer = self.query_one("#visualizer", Static)
         self._visualizer_hud = self.query_one("#visualizer_hud", Static)
         self._playlist_list = self.query_one("#playlist_list", Static)
@@ -596,8 +594,7 @@ class RhythmSlicerApp(App):
 
     def _on_tick(self) -> None:
         self._progress_tick += 1
-        if self._header:
-            self._header.update(self._render_header())
+        self._update_screen_title()
         if (
             self._visualizer
             and not self._frame_player.is_running
@@ -621,7 +618,13 @@ class RhythmSlicerApp(App):
             track = self.playlist.current()
             if track:
                 title = track.title
-        return f"RhythmSlicer Pro | {title}"
+        return "<< Rhythm Slicer Pro >>"
+
+    def _update_screen_title(self) -> None:
+        try:
+            self.screen.border_title = self._render_header()
+        except Exception:
+            return
 
     def _render_visualizer(self) -> str:
         width, height = self._visualizer_viewport()
