@@ -38,7 +38,8 @@ pip install -e .
 ## Run
 
 ```bash
-r-slicer tui path/to/file.mp3
+r-slicer
+r-slicer path/to/file.mp3
 ```
 
 ## Development
@@ -53,10 +54,7 @@ nox -s build
 ## CLI options
 
 ```
-r-slicer play <path> [--wait|--no-wait] [--tui] [--viz <name>]
-r-slicer tui [path] [--viz <name>]
-r-slicer playlist save --from <path> <dest> [--absolute]
-r-slicer playlist show --from <path>
+r-slicer [path] [--viz <name>]
 ```
 
 ## Usage

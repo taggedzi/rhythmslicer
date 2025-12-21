@@ -1,8 +1,8 @@
 **Project Summary: RhythmSlicer Pro**
 
-**Concept:** RhythmSlicer Pro is a cross-platform (Windows, Linux, macOS) CLI music player inspired by the classic WinAmp experience, reimagined through a cyberpunk aesthetic. It’s designed for users who appreciate functional, technically-minded applications and a nostalgic, “secret” feel.
+**Concept:** RhythmSlicer Pro is a cross-platform (Windows, Linux, macOS) TUI music player launched from the CLI, inspired by the classic WinAmp experience and reimagined through a cyberpunk aesthetic. It’s designed for users who appreciate functional, technically-minded applications and a nostalgic, “secret” feel.
 
-**Core Functionality:** The application provides a command-line interface (CLI) for playing MP3 files, managing playlists, and controlling audio playback.
+**Core Functionality:** The application provides a Textual TUI for MP3 playback and playlist management, plus CLI helpers for playlist utilities.
 
 **Technical Details:**
 
