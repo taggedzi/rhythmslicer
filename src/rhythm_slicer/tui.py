@@ -613,11 +613,6 @@ class RhythmSlicerApp(App):
             self._advance_track(auto=True)
 
     def _render_header(self) -> str:
-        title = self._filename
-        if self.playlist and not self.playlist.is_empty():
-            track = self.playlist.current()
-            if track:
-                title = track.title
         return "<< Rhythm Slicer Pro >>"
 
     def _update_screen_title(self) -> None:
