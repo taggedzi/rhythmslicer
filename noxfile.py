@@ -25,7 +25,7 @@ def _has_mypy_config() -> bool:
     return False
 
 
-@nox.session(python="3.12")
+@nox.session
 def lint(session: nox.Session) -> None:
     """Run ruff linting and formatting checks."""
     session.install("ruff")
@@ -33,7 +33,7 @@ def lint(session: nox.Session) -> None:
     session.run("ruff", "format", "--check", ".")
 
 
-@nox.session(name="lint-fix", python="3.12")
+@nox.session(name="lint-fix")
 def lint_fix(session: nox.Session) -> None:
     """Apply ruff fixes and formatting."""
     session.install("ruff")
@@ -41,7 +41,7 @@ def lint_fix(session: nox.Session) -> None:
     session.run("ruff", "format", ".")
 
 
-@nox.session(python=["3.11", "3.12"])
+@nox.session
 def tests(session: nox.Session) -> None:
     """Run pytest in CI-friendly mode."""
     session.install("-e", ".[dev]")
@@ -52,7 +52,7 @@ def tests(session: nox.Session) -> None:
         session.env.pop("RHYTHM_SLICER_CI", None)
 
 
-@nox.session(python="3.12")
+@nox.session
 def typecheck(session: nox.Session) -> None:
     """Run mypy when a config is present."""
     if not _has_mypy_config():
@@ -61,14 +61,14 @@ def typecheck(session: nox.Session) -> None:
     session.run("mypy", "src/rhythm_slicer")
 
 
-@nox.session(python="3.12")
+@nox.session
 def build(session: nox.Session) -> None:
     """Build sdist and wheel artifacts."""
     session.install("build")
     session.run("python", "-m", "build")
 
 
-@nox.session(python="3.12")
+@nox.session
 def coverage(session: nox.Session) -> None:
     """Run coverage reporting."""
     session.install("-e", ".[dev]")
