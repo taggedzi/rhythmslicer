@@ -305,3 +305,32 @@ This document is the single source of truth for TUI layout behavior.
 
 - Keyboard and mouse activation are equivalent
 - No interaction method may bypass state synchronization
+
+## Here is the 80 Col Layout
+
+```ascii
+┌─<< App Title >> ──────────────────────┬──────────────────────────────────────┐
+│ <song> - <artist>                     │ Visualizer content here              │
+│ <song> - <artist>                     │                                      │
+│                                       │                                      │
+│                                       │                                      │
+│                                       │                                      │
+│                                       │                                      │
+│                                       │                                      │
+│                                       │                                      │
+│                                       │                                      │
+│                                       │                                      │
+│                                       │                                      │
+│                                       │                                      │
+│                                       │                                      │
+│                                       │                                      │
+│                                       ┼─ << Current Track >> ────────────────┤
+│                                       │ Track: ###                           │
+│                                       │ TITLE: song.title                    │
+│ Track: xxx/yyy     R:ALL     S:OFF    │ ALBUM: song.album                    │
+│    [<<]  [ PAUSE ] [ STOP ]  [>>]     │ ARTIST: song.artist                  │
+├──────────────────────────────────────────────────────────────────────────────┤
+│ TIME: [════════════════════════════════════════════════════●═══] mm:ss/mm:ss │
+│ VOL:  [═══════════●════] ###                                [ Player_State ] │
+└──────────────────────────────────────────────────────────────────────────────┘
+```
