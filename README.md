@@ -97,3 +97,7 @@ python -c "import vlc; print(vlc.libvlc_get_version())"
 
 If that prints a version (e.g., `3.0.21 Vetinari`), the backend is available.
 If it fails, verify `libvlc.dll` exists at the path and that VLC is installed.
+
+## AI Assistance
+
+Portions of this project were drafted with help from AI tools (such as ChatGPT/Codex) to accelerate writing and implementation. Maintainers review, test, and accept the final output, so accountability for released code and docs stays with the project.

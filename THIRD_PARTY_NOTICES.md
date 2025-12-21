@@ -9,3 +9,7 @@ RhythmSlicer Pro depends on the following major third-party components:
 
 Each dependency is distributed under its own license. Please refer to the
 respective project pages for full license texts.
+
+## AI Assistance
+
+Portions of this project were drafted with help from AI tools (such as ChatGPT/Codex) to accelerate writing and implementation. Maintainers review, test, and accept the final output, so accountability for released code and docs stays with the project.
