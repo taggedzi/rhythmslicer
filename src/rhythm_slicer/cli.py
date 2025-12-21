@@ -82,15 +82,6 @@ def build_parser() -> argparse.ArgumentParser:
         help="Visualization name for the TUI",
     )
 
-    subparsers.add_parser("stop", help="Stop playback")
-    subparsers.add_parser("pause", help="Pause playback")
-    subparsers.add_parser("resume", help="Resume playback")
-
-    volume_parser = subparsers.add_parser("volume", help="Set volume")
-    volume_parser.add_argument("level", type=_volume_type, help="0-100")
-
-    subparsers.add_parser("status", help="Show current status")
-
     playlist_parser = subparsers.add_parser("playlist", help="Playlist utilities")
     playlist_sub = playlist_parser.add_subparsers(dest="playlist_cmd", required=True)
 
@@ -150,22 +141,6 @@ def _execute_command(player: VlcPlayer, args: argparse.Namespace) -> CommandResu
         return CommandResult(0, f"Playing: {args.path}")
     if args.command == "tui":
         return CommandResult(0)
-    if args.command == "stop":
-        player.stop()
-        return CommandResult(0, "Stopped")
-    if args.command == "pause":
-        player.pause()
-        return CommandResult(0, "Paused")
-    if args.command == "resume":
-        player.play()
-        return CommandResult(0, "Resumed")
-    if args.command == "volume":
-        player.set_volume(args.level)
-        return CommandResult(0, f"Volume set to {args.level}")
-    if args.command == "status":
-        state = player.get_state()
-        media = player.current_media or "none"
-        return CommandResult(0, f"State: {state}, Media: {media}")
     if args.command == "playlist":
         playlist = load_from_input(Path(args.from_input))
         if args.playlist_cmd == "save":

@@ -1,76 +1,80 @@
 # RhythmSlicer Pro
 
-RhythmSlicer Pro is a minimal, cross-platform CLI MP3 player that uses VLC via
-`python-vlc`.
+RhythmSlicer Pro is a cross-platform CLI + Textual TUI music player with
+playlist management and built-in ASCII visualizers powered by the VLC backend.
 
-## Quickstart
+![RhythmSlicer TUI](docs/screenshots/ui.png)
 
-1) Install VLC (see prerequisites below).
-2) Install the package:
+## Requirements
 
-```bash
-pip install -e .
-```
-
-3) Play an MP3 (or any file VLC supports):
-
-```bash
-r-slicer play path/to/file.mp3
-```
-
-## How to run
-
-```bash
-# Play a file (waits until playback ends or Ctrl+C)
-r-slicer play path/to/file.mp3
-
-# Launch the Textual TUI
-r-slicer tui path/to/file.mp3
-
-# Pause/Resume/Stop
-r-slicer pause
-r-slicer resume
-r-slicer stop
-
-# Set volume (0-100)
-r-slicer volume 75
-
-# Check status
-r-slicer status
-
-# Exit immediately after starting playback
-r-slicer play --no-wait path/to/file.mp3
-
-# Launch TUI from play command
-r-slicer play --tui path/to/file.mp3
-
-# Module invocation also works
-python -m rhythm_slicer.cli play path/to/file.mp3
-```
-
-## Visualizations (preview)
-
-The `--viz <name>` flag selects a built-in visualization by name. Built-ins:
-`hackscope`, `minimal`, `matrix`. Arbitrary Python file execution is not
-supported.
-
-Example:
-
-```bash
-python -m rhythm_slicer.hackscript path/to/file.mp3 --viz matrix
-```
+- Python 3.9+
+- VLC installed (RhythmSlicer uses VLC via `python-vlc` for playback)
 
 ## Platform prerequisites
 
 - VLC installed and available on your system.
-- Python package `python-vlc` (installed automatically with this project).
+- `python-vlc` is installed automatically with this project.
 
-Note: Commands act on the player instance created for the current process.
+## Install
 
-## Troubleshooting (Windows)
+Windows (PowerShell):
 
-If you see `VLC backend is unavailable`, `python-vlc` likely cannot load
-`libvlc.dll`. Ensure VLC and Python bitness match and set the VLC paths:
+```powershell
+python -m venv .venv
+.\.venv\Scripts\Activate.ps1
+pip install -e .
+```
+
+Linux/macOS (bash):
+
+```bash
+python -m venv .venv
+source .venv/bin/activate
+pip install -e .
+```
+
+## Run
+
+```bash
+r-slicer tui path/to/file.mp3
+```
+
+## CLI options
+
+```
+r-slicer play <path> [--wait|--no-wait] [--tui] [--viz <name>]
+r-slicer tui [path] [--viz <name>]
+r-slicer playlist save --from <path> <dest> [--absolute]
+r-slicer playlist show --from <path>
+```
+
+## Usage
+
+- Press `?` for Help to see keybinds and usage.
+- Playlist basics:
+  - Open a folder or playlist via the in-app prompt.
+  - Navigate with arrow keys; press Enter to play.
+  - Save playlists as `.m3u8` from the TUI.
+
+## Troubleshooting
+
+Logs are always-on and stored in:
+
+- Windows: `%LOCALAPPDATA%/RhythmSlicer/logs/app.log`
+- Linux/macOS: `~/.rhythm_slicer/logs/app.log`
+
+If the app freezes, the watchdog writes stack traces to:
+
+- Windows: `%LOCALAPPDATA%/RhythmSlicer/logs/hangdump.log`
+- Linux/macOS: `~/.rhythm_slicer/logs/hangdump.log`
+
+When opening a GitHub issue, please attach both `app.log` and `hangdump.log`.
+
+### VLC backend not found (Windows)
+
+If you see errors like `VLC backend is unavailable` or `libvlc.dll` cannot be
+loaded, ensure VLC and Python bitness match (both 64-bit), then set the VLC
+paths for your terminal session:
 
 ```powershell
 $env:VLC_DIR = "C:\Program Files\VideoLAN\VLC"
@@ -81,5 +85,4 @@ python -c "import vlc; print(vlc.libvlc_get_version())"
 ```
 
 If that prints a version (e.g., `3.0.21 Vetinari`), the backend is available.
-If it fails, verify `libvlc.dll` exists at the path and that VLC is installed
-as 64-bit when using 64-bit Python.
+If it fails, verify `libvlc.dll` exists at the path and that VLC is installed.
