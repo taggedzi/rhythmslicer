@@ -181,27 +181,11 @@ class PlaylistTable(DataTable):
 
     def __init__(self, **kwargs: object) -> None:
         super().__init__(**kwargs)
-        self._last_click_row: Optional[int] = None
-        self._last_click_time = 0.0
 
     async def _on_click(self, event: events.Click) -> None:
         if hasattr(self.app, "_set_user_navigation_lockout"):
             self.app._set_user_navigation_lockout()
         await super()._on_click(event)
-        meta = event.style.meta or {}
-        if "row" not in meta:
-            return
-        row_index = meta["row"]
-        if row_index < 0:
-            return
-        now = time.monotonic()
-        if (
-            self._last_click_row == row_index
-            and now - self._last_click_time <= 0.4
-        ):
-            self.app.action_play_selected()
-        self._last_click_row = row_index
-        self._last_click_time = now
 
     def _on_mouse_scroll_down(self, event: events.MouseScrollDown) -> None:
         if hasattr(self.app, "_set_user_navigation_lockout"):
@@ -226,7 +210,7 @@ class TransportControls(Static):
 
     def on_mount(self) -> None:
         self.set_interval(0.25, self._refresh_label)
-        self._refresh_label()
+        self.refresh_state()
 
     def on_button_pressed(self, event: Button.Pressed) -> None:
         control_id = event.button.id
@@ -238,14 +222,29 @@ class TransportControls(Static):
             self.app.action_stop()
         elif control_id == "transport_next":
             self.app.action_next_track()
+        self.refresh_state()
 
     def _refresh_label(self) -> None:
+        self.refresh_state()
+
+    def refresh_state(self) -> None:
         try:
             label = self.query_one("#transport_playpause", Button)
+            prev_button = self.query_one("#transport_prev", Button)
+            stop_button = self.query_one("#transport_stop", Button)
+            next_button = self.query_one("#transport_next", Button)
         except Exception:
             return
         state = (self.app.player.get_state() or "").lower()
-        label.label = "Pause" if "playing" in state else "Play"
+        label.label = "Pause " if "playing" in state else "Play  "
+        playlist = getattr(self.app, "playlist", None)
+        has_tracks = bool(playlist and not playlist.is_empty())
+        is_playing = "playing" in state
+        is_paused = "paused" in state
+        prev_button.disabled = not has_tracks
+        next_button.disabled = not has_tracks
+        label.disabled = not has_tracks
+        stop_button.disabled = not (has_tracks and (is_playing or is_paused))
 
 
 @dataclass
@@ -465,6 +464,9 @@ class RhythmSlicerApp(App):
         self._selected_key: Optional[str] = None
         self._missing_row_keys_logged: set[str] = set()
         self._user_navigating_until = 0.0
+        self._track_panel_last_update = 0.0
+        self._track_panel_last_signature: Optional[tuple[object, ...]] = None
+        self._track_panel_last_track_key: Optional[str] = None
         self._progress: Optional[Static] = None
         self._status: Optional[Static] = None
         self._progress_tick = 0
@@ -702,6 +704,13 @@ class RhythmSlicerApp(App):
             return
         label.label = self._render_transport_label()
 
+    def _refresh_transport_controls(self) -> None:
+        try:
+            controls = self.query_one(TransportControls)
+        except Exception:
+            return
+        controls.refresh_state()
+
     def _handle_transport_action(self, control_id: str) -> None:
         if control_id == "key_prev":
             self.action_previous_track()
@@ -754,54 +763,81 @@ class RhythmSlicerApp(App):
         line = (" " * pad + message).ljust(width)
         return "\n".join(line for _ in range(height))
 
-    def _render_visualizer_hud(self) -> str:
+    def _render_visualizer_hud(self) -> Text:
         width, height = self._visualizer_hud_size()
         if width <= 0 or height <= 0:
-            return ""
-        title = "No track"
-        artist = "--"
-        if self.playlist and not self.playlist.is_empty():
-            track = self.playlist.current()
-            if track:
-                meta = get_track_meta(track.path)
-                if meta.title:
-                    title = meta.title
-                else:
-                    title = track.title
-                if meta.artist:
-                    artist = meta.artist
-        state = _display_state(self.player.get_state())
+            return Text("")
+        track = None
+        track_key = None
+        if self.playlist and self._playing_index is not None:
+            if 0 <= self._playing_index < len(self.playlist.tracks):
+                track = self.playlist.tracks[self._playing_index]
+                track_key = self._playlist_row_key(self._playing_index)
+        meta = get_track_meta(track.path) if track else None
+        title = meta.title if meta and meta.title else (track.title if track else "—")
+        if not title and track:
+            title = track.path.name
+        artist = meta.artist if meta and meta.artist else "Unknown"
+        album = "Unknown"
+        state = _display_state(self.player.get_state()).upper()
         position = _format_time_ms(self.player.get_position_ms())
         length = _format_time_ms(self.player.get_length_ms())
         timing = f"{position or '--:--'} / {length or '--:--'}"
-        left_lines = [f"TITLE: {title}", f"ARTIST: {artist}"]
-        right_lines = [f"STATE: {state}", f"TIME: {timing}", f"VOL: {self._volume}"]
+
+        label_style = "dim"
+        value_style = ""
+        title_style = "bold #5fc9d6"
         gap = 2
-        min_col = 18
-        use_two_cols = width >= (min_col * 2 + gap)
+
+        def column_text(
+            label: str, value: str, col_width: int, *, is_title: bool = False
+        ) -> Text:
+            label_text = f"{label}: "
+            value_width = max(1, col_width - len(label_text))
+            value_text = ellipsize(value, value_width)
+            text = Text(label_text, style=label_style)
+            style = title_style if is_title else value_style
+            text.append(value_text, style=style)
+            if text.cell_len < col_width:
+                text.append(" " * (col_width - text.cell_len))
+            return text
+
+        lines: list[Text] = []
+        use_two_cols = width >= 48
         if use_two_cols:
-            left_width = max(min_col, (width - gap) // 2)
-            right_width = max(min_col, width - gap - left_width)
-            rows = max(height, len(left_lines), len(right_lines))
-            left_lines = left_lines + [""] * max(0, rows - len(left_lines))
-            right_lines = right_lines + [""] * max(0, rows - len(right_lines))
-            lines = []
-            for idx in range(rows):
-                left = _truncate_line(left_lines[idx], left_width).ljust(left_width)
-                right = _truncate_line(right_lines[idx], right_width).ljust(right_width)
-                lines.append(f"{left}{' ' * gap}{right}")
+            left_width = max(16, (width - gap) // 2)
+            right_width = max(16, width - gap - left_width)
+            lines.append(
+                column_text("TITLE", title, left_width, is_title=True)
+                + Text(" " * gap)
+                + column_text("STATE", state, right_width)
+            )
+            lines.append(
+                column_text("ARTIST", artist, left_width)
+                + Text(" " * gap)
+                + column_text("TIME", timing, right_width)
+            )
+            lines.append(
+                column_text("ALBUM", album, left_width)
+                + Text(" " * gap)
+                + column_text("VOL", str(self._volume), right_width)
+            )
         else:
-            lines = [
-                f"TITLE: {title}",
-                f"ARTIST: {artist}",
-                f"STATE: {state}",
-                f"TIME: {timing} | VOL: {self._volume}",
-            ]
+            lines.append(column_text("TITLE", title, width, is_title=True))
+            lines.append(column_text("ARTIST", artist, width))
+            lines.append(column_text("ALBUM", album, width))
+            lines.append(column_text("STATE", f"{state} | {timing} | VOL {self._volume}", width))
+
         if len(lines) < height:
-            lines.extend([""] * (height - len(lines)))
+            lines.extend([Text(" " * width)] * (height - len(lines)))
         if len(lines) > height:
             lines = lines[:height]
-        return "\n".join(_truncate_line(line, width).ljust(width) for line in lines)
+        output = Text()
+        for idx, line in enumerate(lines):
+            if idx:
+                output.append("\n")
+            output.append_text(line)
+        return output
 
     def _visualizer_hud_size(self) -> tuple[int, int]:
         if not self._visualizer_hud:
@@ -814,9 +850,56 @@ class RhythmSlicerApp(App):
         height = max(1, getattr(size, "height", 1))
         return (width, height)
 
+    def _current_track_signature(self) -> tuple[object, ...]:
+        track_key = (
+            self._playlist_row_key(self._playing_index)
+            if self._playing_index is not None
+            else None
+        )
+        track = None
+        if self.playlist and self._playing_index is not None:
+            if 0 <= self._playing_index < len(self.playlist.tracks):
+                track = self.playlist.tracks[self._playing_index]
+        meta = get_track_meta(track.path) if track else None
+        title = meta.title if meta and meta.title else (track.title if track else "—")
+        if not title and track:
+            title = track.path.name
+        artist = meta.artist if meta and meta.artist else "Unknown"
+        album = "Unknown"
+        state = _display_state(self.player.get_state()).upper()
+        position = _format_time_ms(self.player.get_position_ms())
+        length = _format_time_ms(self.player.get_length_ms())
+        timing = f"{position or '--:--'} / {length or '--:--'}"
+        width, height = self._visualizer_hud_size()
+        return (
+            track_key,
+            title,
+            artist,
+            album,
+            state,
+            timing,
+            self._volume,
+            width,
+            height,
+        )
+
     def _update_visualizer_hud(self) -> None:
-        if self._visualizer_hud:
-            self._visualizer_hud.update(self._render_visualizer_hud())
+        if not self._visualizer_hud:
+            return
+        signature = self._current_track_signature()
+        track_key = signature[0]
+        now = self._now()
+        if signature == self._track_panel_last_signature:
+            return
+        if (
+            track_key == self._track_panel_last_track_key
+            and now - self._track_panel_last_update < 0.25
+        ):
+            return
+        self._visualizer_hud.update(self._render_visualizer_hud())
+        self._track_panel_last_update = now
+        self._track_panel_last_signature = signature
+        self._track_panel_last_track_key = track_key
 
     def _render_progress(self) -> str:
         if not self._progress:
@@ -1126,6 +1209,7 @@ class RhythmSlicerApp(App):
         self._reset_play_order()
         await self._populate_playlist()
         self._sync_selection()
+        self._refresh_transport_controls()
 
     async def set_playlist_from_open(
         self, playlist: Playlist, source_path: Path
@@ -1140,6 +1224,7 @@ class RhythmSlicerApp(App):
         self._last_open_path = source_path
         if not self._play_current_track():
             self._skip_failed_track()
+        self._refresh_transport_controls()
 
     def _play_current_track(self) -> bool:
         if not self.playlist or self.playlist.is_empty():
@@ -1164,6 +1249,7 @@ class RhythmSlicerApp(App):
             playback_state=self._get_playback_state(),
         )
         self._update_visualizer_hud()
+        self._refresh_transport_controls()
         return True
 
     def _advance_track(self, auto: bool = False) -> None:
@@ -1297,6 +1383,7 @@ class RhythmSlicerApp(App):
             playback_state=desired_state,
         )
         self._update_visualizer_hud()
+        self._refresh_transport_controls()
 
     def action_stop(self) -> None:
         self.player.stop()
@@ -1306,6 +1393,7 @@ class RhythmSlicerApp(App):
         logger.info("Playback stopped")
         self._update_visualizer_hud()
         self._refresh_playlist_table()
+        self._refresh_transport_controls()
 
     def action_seek_back(self) -> None:
         if self._try_seek(-5000):
@@ -1334,26 +1422,32 @@ class RhythmSlicerApp(App):
     def action_next_track(self) -> None:
         if not self.playlist or self.playlist.is_empty():
             self._set_message("No tracks loaded")
+            self._refresh_transport_controls()
             return
         next_index = self._next_index(wrap=self._repeat_mode == "all")
         if next_index is None:
             self._set_message("End of playlist")
+            self._refresh_transport_controls()
             return
         self._set_selected(next_index)
         if not self._play_current_track():
             self._skip_failed_track()
+        self._refresh_transport_controls()
 
     def action_previous_track(self) -> None:
         if not self.playlist or self.playlist.is_empty():
             self._set_message("No tracks loaded")
+            self._refresh_transport_controls()
             return
         prev_index = self._prev_index(wrap=self._repeat_mode == "all")
         if prev_index is None:
             self._set_message("Start of playlist")
+            self._refresh_transport_controls()
             return
         self._set_selected(prev_index)
         if not self._play_current_track():
             self._skip_failed_track()
+        self._refresh_transport_controls()
 
     def action_quit_app(self) -> None:
         logger.info("TUI exit requested")
@@ -1400,6 +1494,7 @@ class RhythmSlicerApp(App):
     def action_play_selected(self) -> None:
         if not self.playlist or self.playlist.is_empty():
             self._set_message("No tracks loaded")
+            self._refresh_transport_controls()
             return
         try:
             focused = self.focused
@@ -1412,6 +1507,7 @@ class RhythmSlicerApp(App):
         ):
             return
         self._play_selected()
+        self._refresh_transport_controls()
 
     def on_data_table_row_highlighted(self, event: DataTable.RowHighlighted) -> None:
         if self._suppress_table_events:
@@ -1476,6 +1572,7 @@ class RhythmSlicerApp(App):
                 self._playing_index = None
                 self._stop_hackscript()
                 self._set_message("Playlist empty")
+                self._refresh_transport_controls()
             else:
                 self._set_message(f"Removed: {removed_track.title}")
             return
@@ -1484,6 +1581,7 @@ class RhythmSlicerApp(App):
             if not self._play_current_track():
                 self._skip_failed_track()
         self._set_message(f"Removed: {removed_track.title}")
+        self._refresh_transport_controls()
 
     def action_cycle_repeat(self) -> None:
         modes = ["off", "one", "all"]
