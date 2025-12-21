@@ -172,3 +172,28 @@ def test_player_position_and_seek_errors(monkeypatch: pytest.MonkeyPatch) -> Non
     assert player.get_length_ms() is None
     assert player.seek_ms(1000) is False
     assert player.set_position_ratio(0.25) is False
+
+
+def test_player_controls_and_end_reached(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(player_vlc, "vlc", FakeVlc)
+    monkeypatch.setattr(player_vlc, "_VLC_IMPORT_ERROR", None)
+    player = player_vlc.VlcPlayer()
+    player.load("track.mp3")
+    player.play()
+    player.pause()
+    player.stop()
+    player.set_volume(10)
+    assert player.current_media == "track.mp3"
+    assert player.consume_end_reached() is False
+    player.signal_end_reached()
+    assert player.consume_end_reached() is True
+    assert player.consume_end_reached() is False
+
+
+def test_attach_end_reached_event_skips_when_missing_vlc(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    player = player_vlc.VlcPlayer.__new__(player_vlc.VlcPlayer)
+    monkeypatch.setattr(player_vlc, "vlc", None)
+    player._player = FakeMediaPlayer()  # type: ignore[attr-defined]
+    player._attach_end_reached_event()

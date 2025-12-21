@@ -42,6 +42,35 @@ def test_dump_threads_writes_header(monkeypatch) -> None:
     hangwatch._HANG_PATH = None
 
 
+def test_enable_faulthandler_handles_open_failure(tmp_path, monkeypatch) -> None:
+    def fake_open(*_args, **_kwargs):
+        raise OSError("nope")
+
+    import builtins
+
+    monkeypatch.setattr(builtins, "open", fake_open)
+    log_path = tmp_path / "app.log"
+    hang_path = hangwatch.enable_faulthandler(log_path)
+    assert hang_path.name == "hangdump.log"
+
+
+def test_dump_threads_handles_errors(monkeypatch) -> None:
+    class BadFile:
+        def write(self, _text: str) -> None:
+            raise OSError("bad")
+
+        def flush(self) -> None:
+            raise OSError("bad")
+
+    def fake_dump_traceback(*, file, all_threads: bool) -> None:
+        raise RuntimeError("boom")
+
+    monkeypatch.setattr(hangwatch.faulthandler, "dump_traceback", fake_dump_traceback)
+    hangwatch._HANG_FILE = BadFile()  # type: ignore[assignment]
+    hangwatch.dump_threads("test")
+    hangwatch._HANG_FILE = None
+
+
 def test_watchdog_triggers_dump(monkeypatch) -> None:
     calls: list[str] = []
 

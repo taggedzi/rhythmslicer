@@ -26,3 +26,26 @@ def test_build_help_text_includes_sections_and_overrides() -> None:
     assert "Troubleshooting" in text
     assert "Change visualization" in text
     assert "Logs —" in text
+
+
+def test_help_modal_dismiss_handlers() -> None:
+    called: list[bool] = []
+
+    class DummyButton:
+        id = "help_close"
+
+    class DummyPressed:
+        button = DummyButton()
+
+    class DummyKey:
+        def __init__(self, key: str) -> None:
+            self.key = key
+
+    modal = help_modal.HelpModal([])
+    modal.dismiss = lambda *_args, **_kwargs: called.append(True)  # type: ignore[assignment]
+    modal.on_button_pressed(DummyPressed())
+    assert called
+    called.clear()
+    modal.on_key(DummyKey("escape"))
+    modal.on_key(DummyKey("q"))
+    assert len(called) == 2

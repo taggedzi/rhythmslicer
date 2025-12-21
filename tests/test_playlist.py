@@ -4,7 +4,13 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from rhythm_slicer.playlist import Playlist, Track, load_from_directory, load_from_m3u
+from rhythm_slicer.playlist import (
+    Playlist,
+    Track,
+    load_from_directory,
+    load_from_input,
+    load_from_m3u,
+)
 
 
 def test_directory_load_sorted(tmp_path: Path) -> None:
@@ -88,3 +94,26 @@ def test_remove_only_item_empties_playlist() -> None:
     playlist.remove(0)
     assert playlist.index == -1
     assert playlist.is_empty()
+
+
+def test_load_from_input_file_and_unsupported(tmp_path: Path) -> None:
+    supported = tmp_path / "song.mp3"
+    supported.write_text("x", encoding="utf-8")
+    playlist = load_from_input(supported)
+    assert playlist.current() is not None
+    unsupported = tmp_path / "note.txt"
+    unsupported.write_text("x", encoding="utf-8")
+    empty = load_from_input(unsupported)
+    assert empty.is_empty()
+
+
+def test_playlist_next_prev_no_wrap() -> None:
+    tracks = [
+        Track(path=Path("one.mp3"), title="one.mp3"),
+        Track(path=Path("two.mp3"), title="two.mp3"),
+    ]
+    playlist = Playlist(tracks, wrap=False)
+    assert playlist.next() == tracks[1]
+    assert playlist.next() is None
+    assert playlist.prev() == tracks[0]
+    assert playlist.prev() is None
