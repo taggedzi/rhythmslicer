@@ -4,7 +4,6 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
-import pytest
 
 from rhythm_slicer import cli
 
