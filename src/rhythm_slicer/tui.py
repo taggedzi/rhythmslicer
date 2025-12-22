@@ -107,6 +107,9 @@ def _format_time_ms(value: Optional[int]) -> Optional[str]:
         return None
     total_seconds = max(0, value // 1000)
     minutes, seconds = divmod(total_seconds, 60)
+    hours, minutes = divmod(minutes, 60)
+    if hours:
+        return f"{hours:02d}:{minutes:02d}:{seconds:02d}"
     return f"{minutes:02d}:{seconds:02d}"
 
 
@@ -296,7 +299,7 @@ class StatusController:
             if level == "warn":
                 timeout = 6.0
             elif level == "error":
-                timeout = 0.0
+                timeout = 6.0
             else:
                 timeout = 3.0
         until = None if timeout == 0 else self._now() + max(0.0, timeout)
@@ -500,9 +503,21 @@ class RhythmSlicerApp(App):
         self._track_panel_last_track_key: Optional[str] = None
         self._loading = False
         self._play_request_id = 0
-        self._progress: Optional[Static] = None
-        self._status: Optional[Static] = None
-        self._progress_tick = 0
+        self._status_time_bar: Optional[Static] = None
+        self._status_time_text: Optional[Static] = None
+        self._status_volume_bar: Optional[Static] = None
+        self._status_volume_text: Optional[Static] = None
+        self._status_state_text: Optional[Static] = None
+        self._status_last_time_text: Optional[str] = None
+        self._status_last_time_value: Optional[int] = None
+        self._status_last_volume_value: Optional[int] = None
+        self._status_last_volume_text: Optional[str] = None
+        self._status_last_message_level: Optional[str] = None
+        self._status_last_state_text: Optional[str] = None
+        self._ui_tick_count = 0
+        self._volume_scrub_active = False
+        self._status_last_time_bar_text: Optional[str] = None
+        self._status_last_volume_bar_text: Optional[str] = None
         self._frame_player = FramePlayer(self)
         self._current_track_path: Optional[Path] = None
         self._viewport_width = 1
@@ -560,8 +575,20 @@ class RhythmSlicerApp(App):
                     with Panel(title="Current Track", id="track_panel"):
                         yield VisualizerHud(id="visualizer_hud")
             with Panel(title="Status", id="status_panel"):
-                yield Static(id="progress", markup=False)
-                yield Static(id="status", markup=False)
+                with Vertical(id="status_stack"):
+                    with Horizontal(id="status_time_row"):
+                        yield Static("TIME:", id="status_time_label", markup=False)
+                        yield Static("", id="status_time_bar", markup=False)
+                        yield Static(
+                            "--:-- / --:--", id="status_time_text", markup=False
+                        )
+                    with Horizontal(id="status_volume_row"):
+                        yield Static("VOL:", id="status_volume_label", markup=False)
+                        yield Static("", id="status_volume_bar", markup=False)
+                        yield Static("  0", id="status_volume_text", markup=False)
+                        yield Static(
+                            "[ STOPPED ]", id="status_state_text", markup=False
+                        )
 
     async def on_mount(self) -> None:
         self._update_screen_title()
@@ -570,8 +597,11 @@ class RhythmSlicerApp(App):
         self._playlist_list = self.query_one("#playlist_list", Static)
         self._playlist_table = self.query_one("#playlist_table", PlaylistTable)
         self._playlist_list.can_focus = True
-        self._progress = self.query_one("#progress", Static)
-        self._status = self.query_one("#status", Static)
+        self._status_time_bar = self.query_one("#status_time_bar", Static)
+        self._status_time_text = self.query_one("#status_time_text", Static)
+        self._status_volume_bar = self.query_one("#status_volume_bar", Static)
+        self._status_volume_text = self.query_one("#status_volume_text", Static)
+        self._status_state_text = self.query_one("#status_state_text", Static)
         self._init_playlist_table()
         self._update_visualizer_hud()
         self._update_visualizer_viewport()
@@ -596,10 +626,12 @@ class RhythmSlicerApp(App):
             self.set_focus(self._playlist_table)
         self._update_transport_row()
         self.set_interval(0.1, self._on_tick)
+        self.set_interval(0.25, self._update_status_panel)
         self.set_interval(0.5, self._update_ui_tick)
         self.set_interval(10.0, self._log_heartbeat)
         self.call_later(self._finalize_visualizer_layout)
         self._apply_layout_constraints()
+        self._update_status_panel(force=True)
         logger.info("TUI mounted")
 
     def _install_asyncio_exception_handler(self) -> None:
@@ -679,6 +711,7 @@ class RhythmSlicerApp(App):
         timeout: Optional[float] = None,
     ) -> None:
         self._status_controller.show_message(text, level=level, timeout=timeout)
+        self._update_status_panel(force=True)
 
     def _save_config(self) -> None:
         self._config = AppConfig(
@@ -692,20 +725,114 @@ class RhythmSlicerApp(App):
         )
         save_config(self._config)
 
-    def _render_status(self) -> Text:
-        if not self._status:
-            return Text("")
-        max_width = max(1, self._status.size.width)
+    def _status_state_label(self) -> str:
+        if self._loading:
+            label = "LOADING"
+        else:
+            state = (self.player.get_state() or "").lower()
+            if "playing" in state:
+                label = "PLAYING"
+            elif "paused" in state:
+                label = "PAUSED"
+            elif "stop" in state:
+                label = "STOPPED"
+            else:
+                label = "STOPPED"
+        return f"[ {label.ljust(7)} ]"
+
+    def _format_status_time(self) -> tuple[str, int]:
+        if self._loading:
+            return "--:-- / --:--", 0
+        position_ms = self.player.get_position_ms()
+        length_ms = self.player.get_length_ms()
+        if not length_ms or length_ms <= 0 or position_ms is None:
+            return "--:-- / --:--", 0
+        position_ms = max(0, position_ms)
+        length_ms = max(0, length_ms)
+        ratio = min(1.0, position_ms / float(length_ms)) if length_ms else 0.0
+        progress = int(ratio * 100)
+        position_text = _format_time_ms(position_ms) or "--:--"
+        length_text = _format_time_ms(length_ms) or "--:--"
+        return f"{position_text} / {length_text}", progress
+
+    def _bar_widget_width(self, widget: Static) -> int:
+        size = getattr(widget, "content_size", None) or widget.size
+        return max(1, getattr(size, "width", 1))
+
+    def _render_status_bar(self, width: int, ratio: float) -> str:
+        if width <= 1:
+            return "█"[:width]
+        width = max(1, width)
+        inner = max(1, width - 2)
+        filled = int(max(0.0, min(1.0, ratio)) * inner)
+        bar = "=" * filled + "-" * max(0, inner - filled)
+        return f"[{bar}]" if width >= 2 else bar
+
+    def _update_status_panel(self, *, force: bool = False) -> None:
+        if (
+            not self._status_time_bar
+            or not self._status_time_text
+            or not self._status_volume_bar
+            or not self._status_volume_text
+            or not self._status_state_text
+        ):
+            return
+
+        time_text, time_value = self._format_status_time()
+        if force or time_text != self._status_last_time_text:
+            self._status_time_text.update(time_text)
+            self._status_last_time_text = time_text
+        if force or time_value != self._status_last_time_value:
+            bar_width = self._bar_widget_width(self._status_time_bar)
+            bar_text = self._render_status_bar(bar_width, time_value / 100.0)
+            if force or bar_text != self._status_last_time_bar_text:
+                self._status_time_bar.update(bar_text)
+                self._status_last_time_bar_text = bar_text
+            self._status_last_time_value = time_value
+
+        volume_value = max(0, min(self._volume, 100))
+        volume_text = f"{volume_value:3d}"
+        if force or volume_text != self._status_last_volume_text:
+            self._status_volume_text.update(volume_text)
+            self._status_last_volume_text = volume_text
+        if force or volume_value != self._status_last_volume_value:
+            bar_width = self._bar_widget_width(self._status_volume_bar)
+            bar_text = self._render_status_bar(bar_width, volume_value / 100.0)
+            if force or bar_text != self._status_last_volume_bar_text:
+                self._status_volume_bar.update(bar_text)
+                self._status_last_volume_bar_text = bar_text
+            self._status_last_volume_value = volume_value
+
         message = self._status_controller._current_message()
-        if message:
-            line = _truncate_line(message.text, max_width)
+        message_text = message.text.splitlines()[0] if message else ""
+        message_level = message.level if message else None
+        normalized = message_text.strip().lower()
+        if normalized in {"playing", "paused", "stopped", "loading", "loading..."}:
+            message_text = ""
+            message_level = None
+        state_text = self._status_state_label()
+        display_text = (
+            f"{state_text} {message_text}" if message_text else state_text
+        ).rstrip()
+        if (
+            force
+            or display_text != self._status_last_state_text
+            or message_level != self._status_last_message_level
+        ):
             style = None
-            if message.level == "warn":
+            if message_level == "warn":
                 style = "#ffcc66"
-            elif message.level == "error":
+            elif message_level == "error":
                 style = "#ff5f52"
-            return Text(line, style=style) if style else Text(line)
-        return Text(_truncate_line(self._render_volume_line(max_width), max_width))
+            if message_text and style:
+                text = Text(state_text)
+                text.append(" ")
+                text.append(message_text, style=style)
+                self._status_state_text.update(text)
+            else:
+                self._status_state_text.update(display_text)
+            self._status_last_state_text = display_text
+            self._status_last_message_level = message_level
 
     def _render_modes(self) -> str:
         mode_map = {"off": "OFF", "one": "ONE", "all": "ALL"}
@@ -754,7 +881,7 @@ class RhythmSlicerApp(App):
             self.action_next_track()
 
     def _on_tick(self) -> None:
-        self._progress_tick += 1
+        self._ui_tick_count += 1
         self._update_screen_title()
         if (
             self._visualizer
@@ -762,13 +889,9 @@ class RhythmSlicerApp(App):
             and self._last_visualizer_text is None
         ):
             self._visualizer.update(self._render_visualizer())
-        if self._progress:
-            self._progress.update(self._render_progress())
         self._update_transport_row()
-        if self._status:
-            self._status.update(self._render_status())
         self._update_visualizer_hud()
-        if self._progress_tick == 1:
+        if self._ui_tick_count == 1:
             self._update_playlist_view()
         if self.player.consume_end_reached():
             self._advance_track(auto=True)
@@ -932,41 +1055,6 @@ class RhythmSlicerApp(App):
         self._track_panel_last_update = now
         self._track_panel_last_signature = signature
         self._track_panel_last_track_key = track_key
-
-    def _render_progress(self) -> str:
-        if not self._progress:
-            return ""
-        size = getattr(self._progress, "size", None)
-        width = max(1, getattr(size, "width", 1) if size else 1)
-        position_text = _format_time_ms(self.player.get_position_ms()) or "--:--"
-        length_text = _format_time_ms(self.player.get_length_ms()) or "--:--"
-        timing = f"{position_text}/{length_text}"
-        prefix = "TIME: "
-        suffix = f" {timing}"
-        bar_width = max(1, width - len(prefix) - len(suffix) - 2)
-        length_ms = self.player.get_length_ms()
-        if not length_ms or length_ms <= 0:
-            bar_chars = ["-"] * bar_width
-            pulse = self._progress_tick % max(1, bar_width)
-            bar_chars[pulse] = "="
-            line = f"{prefix}[{''.join(bar_chars)}]{suffix}"
-            return _truncate_line(line, width)
-        position_ms = self.player.get_position_ms() or 0
-        ratio = min(1.0, max(0.0, position_ms / float(length_ms)))
-        filled = int(ratio * bar_width)
-        bar = "=" * filled + "-" * max(0, bar_width - filled)
-        line = f"{prefix}[{bar}]{suffix}"
-        return _truncate_line(line, width)
-
-    def _render_volume_line(self, width: int) -> str:
-        prefix = "VOL: "
-        state = _display_state(self.player.get_state()).upper()
-        suffix = f" {self._volume:3d} [{state}]"
-        bar_width = max(1, width - len(prefix) - len(suffix) - 2)
-        filled = int(bar_width * max(0, min(self._volume, 100)) / 100.0)
-        bar = "=" * filled + "-" * max(0, bar_width - filled)
-        line = f"{prefix}[{bar}]{suffix}"
-        return _truncate_line(line, width)
 
     def _init_playlist_table(self) -> None:
         if not self._playlist_table:
@@ -1262,6 +1350,7 @@ class RhythmSlicerApp(App):
         if active:
             self._set_message(message, timeout=0.0)
         self._refresh_transport_controls()
+        self._update_status_panel(force=True)
 
     def _load_and_play_blocking(self, track: Track) -> None:
         self.player.load(str(track.path))
@@ -1298,6 +1387,7 @@ class RhythmSlicerApp(App):
         )
         self._update_visualizer_hud()
         self._refresh_transport_controls()
+        self._update_status_panel(force=True)
 
     def _handle_playback_error(
         self,
@@ -1314,6 +1404,7 @@ class RhythmSlicerApp(App):
         self._refresh_transport_controls()
         if on_failure == "skip":
             self._skip_failed_track()
+        self._update_status_panel(force=True)
 
     def _play_current_track(self, *, on_failure: str = "message") -> bool:
         if not self.playlist or self.playlist.is_empty():
@@ -1471,6 +1562,7 @@ class RhythmSlicerApp(App):
         )
         self._update_visualizer_hud()
         self._refresh_transport_controls()
+        self._update_status_panel(force=True)
 
     def action_stop(self) -> None:
         if self._loading:
@@ -1484,6 +1576,7 @@ class RhythmSlicerApp(App):
         self._update_visualizer_hud()
         self._refresh_playlist_table()
         self._refresh_transport_controls()
+        self._update_status_panel(force=True)
 
     def action_seek_back(self) -> None:
         if self._try_seek(-5000):
@@ -1501,6 +1594,7 @@ class RhythmSlicerApp(App):
         self._set_message("Volume up")
         self._save_config()
         self._update_visualizer_hud()
+        self._update_status_panel(force=True)
 
     def action_volume_down(self) -> None:
         self._volume = max(0, self._volume - 5)
@@ -1508,6 +1602,7 @@ class RhythmSlicerApp(App):
         self._set_message("Volume down")
         self._save_config()
         self._update_visualizer_hud()
+        self._update_status_panel(force=True)
 
     def action_next_track(self) -> None:
         if not self.playlist or self.playlist.is_empty():
@@ -1867,14 +1962,24 @@ class RhythmSlicerApp(App):
         self._sync_selection()
 
     def on_mouse_down(self, event: events.MouseDown) -> None:
-        if self._progress and getattr(self._progress, "region", None):
-            region = self._progress.region
+        if self._status_time_bar and getattr(self._status_time_bar, "region", None):
+            region = self._status_time_bar.region
             sx = getattr(event, "screen_x", event.x)
             sy = getattr(event, "screen_y", event.y)
             if region.contains(sx, sy):
                 ratio = ratio_from_click(int(sx - region.x), region.width)
                 self._seek_to_ratio(ratio)
                 self._scrub_active = True
+                event.stop()
+                return
+        if self._status_volume_bar and getattr(self._status_volume_bar, "region", None):
+            region = self._status_volume_bar.region
+            sx = getattr(event, "screen_x", event.x)
+            sy = getattr(event, "screen_y", event.y)
+            if region.contains(sx, sy):
+                ratio = ratio_from_click(int(sx - region.x), region.width)
+                self._set_volume_from_ratio(ratio)
+                self._volume_scrub_active = True
                 event.stop()
                 return
         if self._playlist_table and getattr(self._playlist_table, "region", None):
@@ -1905,23 +2010,41 @@ class RhythmSlicerApp(App):
         self._last_click_time = now
 
     def on_mouse_move(self, event: events.MouseMove) -> None:
-        if not self._scrub_active or not self._progress:
-            return
-        region = getattr(self._progress, "region", None)
-        if not region:
-            return
         sx = getattr(event, "screen_x", event.x)
         sy = getattr(event, "screen_y", event.y)
-        if not region.contains(sx, sy):
+        if self._scrub_active and self._status_time_bar:
+            region = getattr(self._status_time_bar, "region", None)
+            if region and region.contains(sx, sy):
+                ratio = ratio_from_click(int(sx - region.x), region.width)
+                self._seek_to_ratio(ratio)
+                event.stop()
             return
-        ratio = ratio_from_click(int(sx - region.x), region.width)
-        self._seek_to_ratio(ratio)
-        event.stop()
+        if self._volume_scrub_active and self._status_volume_bar:
+            region = getattr(self._status_volume_bar, "region", None)
+            if region and region.contains(sx, sy):
+                ratio = ratio_from_click(int(sx - region.x), region.width)
+                self._set_volume_from_ratio(ratio)
+                event.stop()
 
     def on_mouse_up(self, event: events.MouseUp) -> None:
         if self._scrub_active:
             self._scrub_active = False
             event.stop()
+            return
+        if self._volume_scrub_active:
+            self._volume_scrub_active = False
+            self._save_config()
+            event.stop()
+            return
+        del event
+
+    def _set_volume_from_ratio(self, ratio: float) -> None:
+        volume = int(max(0.0, min(1.0, ratio)) * 100)
+        if volume == self._volume:
+            return
+        self._volume = volume
+        self.player.set_volume(self._volume)
+        self._update_status_panel(force=True)
 
     def on_resize(self, event: events.Resize) -> None:
         del event
@@ -1931,6 +2054,7 @@ class RhythmSlicerApp(App):
         self._update_visualizer_viewport()
         self._update_playlist_view()
         self._update_visualizer_hud()
+        self._update_status_panel(force=True)
         if self._current_track_path:
             self._restart_hackscript_from_player()
             self._set_message("Visualizer restarted (resize)")
