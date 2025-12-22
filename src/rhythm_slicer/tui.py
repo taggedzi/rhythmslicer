@@ -12,6 +12,7 @@ from pathlib import Path
 import time
 from typing import Callable, Iterator, Optional
 import logging
+from typing_extensions import TypeAlias
 
 try:
     from textual.app import App, ComposeResult
@@ -22,14 +23,21 @@ try:
     from textual.widgets import Button, DataTable, Header, Input, Static
     from textual.widgets.data_table import RowDoesNotExist
     from rich.text import Text
+
     try:
-        from textual.widgets import Panel
+        from textual.widgets import Panel as TextualPanel
     except Exception:
-        class Panel(Container):
-            def __init__(self, *children: object, title: str | None = None, **kwargs: object) -> None:
-                super().__init__(*children, **kwargs)
-                if title:
-                    self.border_title = title
+        TextualPanel = None
+
+    class PanelFallback(Container):
+        def __init__(
+            self, *children: object, title: str | None = None, **kwargs: object
+        ) -> None:
+            super().__init__(*children, **kwargs)
+            if title:
+                self.border_title = title
+
+    Panel = TextualPanel or PanelFallback
 except Exception as exc:  # pragma: no cover - depends on environment
     raise RuntimeError(
         "Textual is required for the TUI. Install the 'textual' dependency."
@@ -51,6 +59,18 @@ from rhythm_slicer.playlist import (
 )
 
 logger = logging.getLogger(__name__)
+
+TrackSignature: TypeAlias = tuple[
+    Optional[str],
+    str,
+    str,
+    str,
+    str,
+    str,
+    int,
+    int,
+    int,
+]
 
 
 def visualizer_bars(seed_ms: int, width: int, height: int) -> list[int]:
@@ -238,13 +258,16 @@ class TransportControls(Static):
         state = (self.app.player.get_state() or "").lower()
         label.label = "Pause " if "playing" in state else "Play  "
         playlist = getattr(self.app, "playlist", None)
+        is_loading = bool(getattr(self.app, "_loading", False))
         has_tracks = bool(playlist and not playlist.is_empty())
         is_playing = "playing" in state
         is_paused = "paused" in state
-        prev_button.disabled = not has_tracks
-        next_button.disabled = not has_tracks
-        label.disabled = not has_tracks
-        stop_button.disabled = not (has_tracks and (is_playing or is_paused))
+        prev_button.disabled = is_loading or not has_tracks
+        next_button.disabled = is_loading or not has_tracks
+        label.disabled = is_loading or not has_tracks
+        stop_button.disabled = is_loading or not (
+            has_tracks and (is_playing or is_paused)
+        )
 
 
 @dataclass
@@ -342,11 +365,19 @@ class StatusController:
             }:
                 return "transport"
             return "general"
-        if self._focus_has_id(focused, {"playlist_list", "playlist_table", "playlist_panel"}):
+        if self._focus_has_id(
+            focused, {"playlist_list", "playlist_table", "playlist_panel"}
+        ):
             return "playlist"
         if self._focus_has_id(
             focused,
-            {"visualizer", "visualizer_hud", "visualizer_panel", "track_panel", "right_column"},
+            {
+                "visualizer",
+                "visualizer_hud",
+                "visualizer_panel",
+                "track_panel",
+                "right_column",
+            },
         ):
             return "visualizer"
         if self._focus_has_id(
@@ -465,8 +496,10 @@ class RhythmSlicerApp(App):
         self._missing_row_keys_logged: set[str] = set()
         self._user_navigating_until = 0.0
         self._track_panel_last_update = 0.0
-        self._track_panel_last_signature: Optional[tuple[object, ...]] = None
+        self._track_panel_last_signature: Optional[TrackSignature] = None
         self._track_panel_last_track_key: Optional[str] = None
+        self._loading = False
+        self._play_request_id = 0
         self._progress: Optional[Static] = None
         self._status: Optional[Static] = None
         self._progress_tick = 0
@@ -556,8 +589,7 @@ class RhythmSlicerApp(App):
                 self.playlist = Playlist([])
         await self.set_playlist(self.playlist, preserve_path=None)
         if self.playlist and not self.playlist.is_empty():
-            if not self._play_current_track():
-                self._skip_failed_track()
+            self._play_current_track(on_failure="skip")
         else:
             self._set_message("No tracks loaded")
         if self._playlist_table:
@@ -768,11 +800,9 @@ class RhythmSlicerApp(App):
         if width <= 0 or height <= 0:
             return Text("")
         track = None
-        track_key = None
         if self.playlist and self._playing_index is not None:
             if 0 <= self._playing_index < len(self.playlist.tracks):
                 track = self.playlist.tracks[self._playing_index]
-                track_key = self._playlist_row_key(self._playing_index)
         meta = get_track_meta(track.path) if track else None
         title = meta.title if meta and meta.title else (track.title if track else "—")
         if not title and track:
@@ -826,7 +856,9 @@ class RhythmSlicerApp(App):
             lines.append(column_text("TITLE", title, width, is_title=True))
             lines.append(column_text("ARTIST", artist, width))
             lines.append(column_text("ALBUM", album, width))
-            lines.append(column_text("STATE", f"{state} | {timing} | VOL {self._volume}", width))
+            lines.append(
+                column_text("STATE", f"{state} | {timing} | VOL {self._volume}", width)
+            )
 
         if len(lines) < height:
             lines.extend([Text(" " * width)] * (height - len(lines)))
@@ -850,7 +882,7 @@ class RhythmSlicerApp(App):
         height = max(1, getattr(size, "height", 1))
         return (width, height)
 
-    def _current_track_signature(self) -> tuple[object, ...]:
+    def _current_track_signature(self) -> TrackSignature:
         track_key = (
             self._playlist_row_key(self._playing_index)
             if self._playing_index is not None
@@ -906,21 +938,21 @@ class RhythmSlicerApp(App):
             return ""
         size = getattr(self._progress, "size", None)
         width = max(1, getattr(size, "width", 1) if size else 1)
-        position = _format_time_ms(self.player.get_position_ms()) or "--:--"
-        length_label = _format_time_ms(self.player.get_length_ms()) or "--:--"
-        timing = f"{position}/{length_label}"
+        position_text = _format_time_ms(self.player.get_position_ms()) or "--:--"
+        length_text = _format_time_ms(self.player.get_length_ms()) or "--:--"
+        timing = f"{position_text}/{length_text}"
         prefix = "TIME: "
         suffix = f" {timing}"
         bar_width = max(1, width - len(prefix) - len(suffix) - 2)
-        length = self.player.get_length_ms()
-        if not length or length <= 0:
-            bar = ["-"] * bar_width
+        length_ms = self.player.get_length_ms()
+        if not length_ms or length_ms <= 0:
+            bar_chars = ["-"] * bar_width
             pulse = self._progress_tick % max(1, bar_width)
-            bar[pulse] = "="
-            line = f"{prefix}[{''.join(bar)}]{suffix}"
+            bar_chars[pulse] = "="
+            line = f"{prefix}[{''.join(bar_chars)}]{suffix}"
             return _truncate_line(line, width)
-        position = self.player.get_position_ms() or 0
-        ratio = min(1.0, max(0.0, position / float(length)))
+        position_ms = self.player.get_position_ms() or 0
+        ratio = min(1.0, max(0.0, position_ms / float(length_ms)))
         filled = int(ratio * bar_width)
         bar = "=" * filled + "-" * max(0, bar_width - filled)
         line = f"{prefix}[{bar}]{suffix}"
@@ -1222,25 +1254,41 @@ class RhythmSlicerApp(App):
         await self._populate_playlist()
         self._sync_selection()
         self._last_open_path = source_path
-        if not self._play_current_track():
-            self._skip_failed_track()
+        self._play_current_track(on_failure="skip")
         self._refresh_transport_controls()
 
-    def _play_current_track(self) -> bool:
-        if not self.playlist or self.playlist.is_empty():
-            return False
-        track = self.playlist.current()
-        if not track:
-            return False
+    def _set_loading(self, active: bool, *, message: str = "Loading...") -> None:
+        self._loading = active
+        if active:
+            self._set_message(message, timeout=0.0)
+        self._refresh_transport_controls()
+
+    def _load_and_play_blocking(self, track: Track) -> None:
+        self.player.load(str(track.path))
+        self.player.play()
+
+    async def _play_track_worker(
+        self,
+        track: Track,
+        *,
+        request_id: int,
+        on_failure: str,
+    ) -> None:
         try:
-            self.player.load(str(track.path))
-            self.player.play()
-        except Exception:
-            logger.exception("Playback failed for %s", track.path)
-            self._set_message(f"Failed to play: {track.title}", level="error")
-            return False
-        self._playing_index = self.playlist.index
-        logger.info("Track change index=%s path=%s", self.playlist.index, track.path)
+            await asyncio.to_thread(self._load_and_play_blocking, track)
+        except Exception as exc:
+            self._handle_playback_error(exc, track, on_failure, request_id)
+        else:
+            self._handle_playback_started(track, request_id)
+
+    def _handle_playback_started(self, track: Track, request_id: Optional[int]) -> None:
+        if request_id is not None and request_id != self._play_request_id:
+            return
+        self._loading = False
+        playlist_index = self.playlist.index if self.playlist else None
+        self._playing_index = playlist_index
+        logger.info("Track change index=%s path=%s", playlist_index, track.path)
+        self._set_message("Playing")
         self._update_playing_row_style()
         self._sync_selection()
         self._start_hackscript(
@@ -1250,13 +1298,55 @@ class RhythmSlicerApp(App):
         )
         self._update_visualizer_hud()
         self._refresh_transport_controls()
+
+    def _handle_playback_error(
+        self,
+        exc: Exception,
+        track: Track,
+        on_failure: str,
+        request_id: Optional[int],
+    ) -> None:
+        if request_id is not None and request_id != self._play_request_id:
+            return
+        self._loading = False
+        logger.exception("Playback failed for %s", track.path)
+        self._set_message(f"Failed to play: {track.title}", level="error")
+        self._refresh_transport_controls()
+        if on_failure == "skip":
+            self._skip_failed_track()
+
+    def _play_current_track(self, *, on_failure: str = "message") -> bool:
+        if not self.playlist or self.playlist.is_empty():
+            return False
+        track = self.playlist.current()
+        if not track:
+            return False
+        self._play_request_id += 1
+        request_id = self._play_request_id
+        try:
+            asyncio.get_running_loop()
+        except RuntimeError:
+            try:
+                self._load_and_play_blocking(track)
+            except Exception as exc:
+                self._handle_playback_error(exc, track, on_failure, request_id)
+                return False
+            self._handle_playback_started(track, request_id)
+            return True
+        self._set_loading(True)
+        self.run_worker(
+            self._play_track_worker(
+                track, request_id=request_id, on_failure=on_failure
+            ),
+            exclusive=True,
+        )
         return True
 
     def _advance_track(self, auto: bool = False) -> None:
         if not self.playlist or self.playlist.is_empty():
             return
         if auto and self._repeat_mode == "one":
-            self._play_current_track()
+            self._play_current_track(on_failure="skip")
             return
         wrap = self._repeat_mode == "all"
         next_index = self._next_index(wrap=wrap)
@@ -1267,8 +1357,7 @@ class RhythmSlicerApp(App):
             self._set_message("End of playlist")
             return
         self._set_selected(next_index, move_cursor=False, update_selected_key=False)
-        if not self._play_current_track():
-            self._skip_failed_track()
+        self._play_current_track(on_failure="skip")
 
     def _skip_failed_track(self) -> None:
         if not self.playlist or self.playlist.is_empty():
@@ -1278,7 +1367,7 @@ class RhythmSlicerApp(App):
             track = self.playlist.next()
             if track is None:
                 break
-            if self._play_current_track():
+            if self._play_current_track(on_failure="skip"):
                 return
             attempts -= 1
         self.player.stop()
@@ -1368,10 +1457,8 @@ class RhythmSlicerApp(App):
             logger.info("Playback resumed")
         else:
             if self.playlist and not self.playlist.is_empty():
-                if self._play_current_track():
-                    self._set_message("Playing")
+                if self._play_current_track(on_failure="message"):
                     logger.info("Playback started")
-                    return
                 return
             self.player.play()
             self._set_message("Playing")
@@ -1386,6 +1473,9 @@ class RhythmSlicerApp(App):
         self._refresh_transport_controls()
 
     def action_stop(self) -> None:
+        if self._loading:
+            self._play_request_id += 1
+            self._loading = False
         self.player.stop()
         self._playing_index = None
         self._stop_hackscript()
@@ -1430,8 +1520,7 @@ class RhythmSlicerApp(App):
             self._refresh_transport_controls()
             return
         self._set_selected(next_index)
-        if not self._play_current_track():
-            self._skip_failed_track()
+        self._play_current_track(on_failure="skip")
         self._refresh_transport_controls()
 
     def action_previous_track(self) -> None:
@@ -1445,8 +1534,7 @@ class RhythmSlicerApp(App):
             self._refresh_transport_controls()
             return
         self._set_selected(prev_index)
-        if not self._play_current_track():
-            self._skip_failed_track()
+        self._play_current_track(on_failure="skip")
         self._refresh_transport_controls()
 
     def action_quit_app(self) -> None:
@@ -1540,7 +1628,9 @@ class RhythmSlicerApp(App):
             else:
                 self._selected_key = raw_key
                 if index != self.playlist.index:
-                    self._set_selected(index, move_cursor=False, update_selected_key=True)
+                    self._set_selected(
+                        index, move_cursor=False, update_selected_key=True
+                    )
         self.action_play_selected()
 
     def on_data_table_cell_selected(self, event: DataTable.CellSelected) -> None:
@@ -1578,8 +1668,7 @@ class RhythmSlicerApp(App):
             return
         self._update_playlist_view()
         if was_playing:
-            if not self._play_current_track():
-                self._skip_failed_track()
+            self._play_current_track(on_failure="skip")
         self._set_message(f"Removed: {removed_track.title}")
         self._refresh_transport_controls()
 
@@ -1774,8 +1863,7 @@ class RhythmSlicerApp(App):
             self._set_message("No tracks loaded")
             return
         self._sync_play_order_pos()
-        if not self._play_current_track():
-            self._skip_failed_track()
+        self._play_current_track(on_failure="skip")
         self._sync_selection()
 
     def on_mouse_down(self, event: events.MouseDown) -> None:
@@ -2017,9 +2105,7 @@ class RhythmSlicerApp(App):
         preserve = preserve_track.path if preserve_track else None
         await self.set_playlist(new_playlist, preserve_path=preserve)
         self._last_playlist_path = path
-        if not self._play_current_track():
-            self._skip_failed_track()
-        else:
+        if self._play_current_track(on_failure="skip"):
             self._set_message(f"Loaded playlist: {path}")
             logger.info("Playlist loaded from %s", path)
 
