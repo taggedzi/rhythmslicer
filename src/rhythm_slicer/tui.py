@@ -504,6 +504,8 @@ class RhythmSlicerApp(App):
         self._visualizer_hud: Optional[Static] = None
         self._playlist_list: Optional[Static] = None
         self._playlist_table: Optional[PlaylistTable] = None
+        self._playlist_counter: Optional[Static] = None
+        self._playlist_counter_text: Optional[str] = None
         self._playlist_title_column = "title"
         self._playlist_artist_column = "artist"
         self._playlist_table_source: Optional[Playlist] = None
@@ -563,13 +565,19 @@ class RhythmSlicerApp(App):
                 with Panel(title="Playlist", id="playlist_panel"):
                     with Vertical(id="playlist_stack"):
                         yield PlaylistTable(id="playlist_table")
+                        with Horizontal(id="playlist_controls"):
+                            yield Static("0000/0000", id="playlist_counter")
+                            yield Button(
+                                "R:OFF", id="repeat_toggle", classes="playlist_toggle"
+                            )
+                            yield Button(
+                                "S:OFF", id="shuffle_toggle", classes="playlist_toggle"
+                            )
                         yield TransportControls()
                         with Container(id="legacy_controls"):
                             yield Static(id="playlist_list", markup=True)
                             with Horizontal(id="playlist_footer"):
                                 yield Static(id="playlist_footer_track")
-                                yield Button("R:OFF", id="repeat_toggle")
-                                yield Button("S:OFF", id="shuffle_toggle")
                             yield Horizontal(
                                 Button(
                                     Text("[<<]"), id="key_prev", classes="transport_key"
@@ -616,6 +624,7 @@ class RhythmSlicerApp(App):
         self._visualizer_hud = self.query_one("#visualizer_hud", Static)
         self._playlist_list = self.query_one("#playlist_list", Static)
         self._playlist_table = self.query_one("#playlist_table", PlaylistTable)
+        self._playlist_counter = self.query_one("#playlist_counter", Static)
         self._playlist_list.can_focus = True
         self._status_time_bar = self.query_one("#status_time_bar", Static)
         self._status_time_text = self.query_one("#status_time_text", Static)
@@ -1420,6 +1429,7 @@ class RhythmSlicerApp(App):
             playback_state=self._get_playback_state(),
         )
         self._update_visualizer_hud()
+        self._update_playlist_controls()
         self._refresh_transport_controls()
         self._update_status_panel(force=True)
 
@@ -1608,6 +1618,7 @@ class RhythmSlicerApp(App):
         logger.info("Playback stopped")
         self._update_visualizer_hud()
         self._refresh_playlist_table()
+        self._update_playlist_controls()
         self._refresh_transport_controls()
         self._update_status_panel(force=True)
 
@@ -1874,13 +1885,14 @@ class RhythmSlicerApp(App):
     def _update_playlist_view(self) -> None:
         if not self._playlist_list or not self.playlist:
             self._refresh_playlist_table()
+            self._update_playlist_controls()
             return
         width = self._playlist_width()
         view_height = self._playlist_view_height()
         if self.playlist.is_empty():
             message = _truncate_line("No tracks loaded", width)
             self._playlist_list.update(message)
-            self._update_playlist_footer()
+            self._update_playlist_controls()
             self._refresh_playlist_table()
             return
         lines: list[Text] = []
@@ -1910,8 +1922,15 @@ class RhythmSlicerApp(App):
                 output.append("\n")
             output.append_text(line)
         self._playlist_list.update(output)
-        self._update_playlist_footer()
+        self._update_playlist_controls()
         self._refresh_playlist_table()
+
+    def _render_track_counter(self) -> str:
+        total_tracks = len(self.playlist.tracks) if self.playlist else 0
+        width = max(4, len(str(total_tracks)))
+        playing_index = self._playing_index
+        display_index = playing_index + 1 if playing_index is not None else 0
+        return f"{display_index:0{width}d}/{total_tracks:0{width}d}"
 
     def _render_playlist_footer(self) -> str:
         if not self.playlist or self.playlist.is_empty():
@@ -1923,15 +1942,26 @@ class RhythmSlicerApp(App):
         text = f"Track: {current}/{total}"
         return _truncate_line(text, self._playlist_width())
 
-    def _update_playlist_footer(self) -> None:
-        if not self._playlist_list:
+    def _update_playlist_controls(self) -> None:
+        if not self._playlist_counter:
             return
-        track = self.query_one("#playlist_footer_track", Static)
-        repeat = self.query_one("#repeat_toggle", Button)
-        shuffle = self.query_one("#shuffle_toggle", Button)
-        track.update(self._render_playlist_footer())
+        counter_text = self._render_track_counter()
+        if counter_text != self._playlist_counter_text:
+            self._playlist_counter.update(counter_text)
+            self._playlist_counter_text = counter_text
+        try:
+            repeat = self.query_one("#repeat_toggle", Button)
+            shuffle = self.query_one("#shuffle_toggle", Button)
+        except Exception:
+            return
         repeat.label = self._render_repeat_label()
         shuffle.label = self._render_shuffle_label()
+        if self._playlist_list:
+            try:
+                track = self.query_one("#playlist_footer_track", Static)
+            except Exception:
+                return
+            track.update(self._render_playlist_footer())
 
     def _playlist_width(self) -> int:
         if not self._playlist_list:
