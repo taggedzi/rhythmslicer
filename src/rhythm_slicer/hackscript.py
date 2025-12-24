@@ -10,6 +10,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 import argparse
 import json
+import logging
 from hashlib import sha256
 from pathlib import Path
 import sys
@@ -23,19 +24,22 @@ from rhythm_slicer.visualizations import minimal as minimal_viz
 
 @dataclass(frozen=True)
 class HackFrame:
+    """A rendered frame plus timing metadata for the TUI."""
+
     text: str
     hold_ms: int = 80
     mode: str = "hacking"
 
 
 def _extract_text(value: object | None) -> str | None:
+    """Best-effort extraction of a displayable string."""
     if value is None:
         return None
     if hasattr(value, "text"):
         try:
-            value = value.text
-        except Exception:
-            value = value
+            value = value.text  # pyright: ignore[reportAttributeAccessIssue]
+        except (AttributeError, RuntimeError, TypeError, ValueError):
+            pass
     if isinstance(value, (list, tuple)):
         value = value[0] if value else None
     if value is None:
@@ -49,6 +53,7 @@ def _extract_text(value: object | None) -> str | None:
 
 
 def _read_tag(tags: object | None, keys: tuple[str, ...]) -> str | None:
+    """Return the first non-empty tag value for the given keys."""
     if tags is None:
         return None
     getter = getattr(tags, "get", None)
@@ -57,7 +62,7 @@ def _read_tag(tags: object | None, keys: tuple[str, ...]) -> str | None:
     for key in keys:
         try:
             value = getter(key)
-        except Exception:
+        except (AttributeError, KeyError, TypeError, ValueError):
             continue
         text = _extract_text(value)
         if text:
@@ -66,18 +71,22 @@ def _read_tag(tags: object | None, keys: tuple[str, ...]) -> str | None:
 
 
 def _stable_seed(path: str) -> int:
+    """Generate a stable integer seed for a path."""
     digest = sha256(path.encode("utf-8")).hexdigest()
     return int(digest[:8], 16)
 
 
 def _extract_metadata(track_path: Path) -> dict[str, Any]:
+    """Extract safe, read-only metadata from the audio file."""
     try:
-        from mutagen import File as MutagenFile
-    except Exception:
+        from mutagen import File as MutagenFile  # pyright: ignore[reportPrivateImportUsage]
+    except ImportError:
+        logger.warning("Metadata unavailable: mutagen is not installed")
         return {}
     try:
         audio = MutagenFile(track_path)
-    except Exception:
+    except (OSError, RuntimeError, TypeError, ValueError):
+        logger.warning("Failed to read metadata from %s", track_path, exc_info=True)
         return {}
     if not audio:
         return {}
@@ -94,7 +103,7 @@ def _extract_metadata(track_path: Path) -> dict[str, Any]:
         if length is not None:
             try:
                 duration_sec = int(length)
-            except Exception:
+            except (TypeError, ValueError, OverflowError):
                 duration_sec = None
 
     bitrate_kbps = None
@@ -103,7 +112,7 @@ def _extract_metadata(track_path: Path) -> dict[str, Any]:
         if bitrate:
             try:
                 bitrate_kbps = int(bitrate // 1000)
-            except Exception:
+            except (TypeError, ValueError, OverflowError):
                 bitrate_kbps = None
 
     sample_rate = None
@@ -117,7 +126,8 @@ def _extract_metadata(track_path: Path) -> dict[str, Any]:
     container = None
     mime = getattr(audio, "mime", None)
     if isinstance(mime, (list, tuple)) and mime:
-        container = _extract_text(mime[0])
+        first_mime = next(iter(mime), None)
+        container = _extract_text(first_mime)
     if container is None:
         container = _extract_text(track_path.suffix.lstrip(".")) or None
     if codec is None and container:
@@ -151,9 +161,9 @@ def _build_context(
     prefs: dict[str, Any],
     seed: int | None,
 ) -> VizContext:
+    """Assemble a visualization context from inputs and metadata."""
     meta = _extract_metadata(track_path)
-    width = max(1, int(viewport[0]))
-    height = max(1, int(viewport[1]))
+    width, height = _normalize_viewport(viewport)
     seed_value = seed if seed is not None else _stable_seed(str(track_path))
     return VizContext(
         track_path=str(track_path),
@@ -173,22 +183,17 @@ def run_generator(
     prefs: dict[str, Any],
     seed: int | None = None,
 ) -> Iterator[str]:
+    """Load the visualization plugin and return its frame generator."""
     try:
         plugin = load_viz(viz_name)
-    except Exception as exc:
-        print(
-            f"warning: failed to load viz '{viz_name}': {exc}",
-            file=sys.stderr,
-        )
+    except (ImportError, RuntimeError, TypeError, ValueError) as exc:
+        logger.warning("Failed to load viz '%s': %s", viz_name, exc)
         plugin = minimal_viz
     if (
         getattr(plugin, "VIZ_NAME", None) != viz_name
         and viz_name != minimal_viz.VIZ_NAME
     ):
-        print(
-            f"warning: viz '{viz_name}' not found; using '{minimal_viz.VIZ_NAME}'",
-            file=sys.stderr,
-        )
+        logger.warning("Viz '%s' not found; using '%s'", viz_name, minimal_viz.VIZ_NAME)
     ctx = _build_context(track_path, viewport, prefs, seed)
     return plugin.generate_frames(ctx)
 
@@ -200,16 +205,13 @@ def generate(
     seed: int | None = None,
     viz_name: str = "hackscope",
 ) -> Iterator[HackFrame]:
+    """Yield HackFrame objects with pacing derived from preferences."""
     fps = prefs.get("fps")
     if fps is None:
         hold_ms = 80
     else:
-        try:
-            fps_value = float(fps)
-        except Exception:
-            fps_value = 20.0
-        fps_value = max(1.0, fps_value)
-        hold_ms = int(1000 / fps_value)
+        fps_value = _get_fps_value(fps, default=20.0)
+        hold_ms = _hold_ms_from_fps(fps_value)
     for frame in run_generator(
         viz_name=viz_name,
         track_path=track_path,
@@ -221,16 +223,18 @@ def generate(
 
 
 def _parse_prefs(raw: str) -> dict[str, Any]:
+    """Parse a JSON preferences object, returning an empty dict on errors."""
     if not raw:
         return {}
     try:
         value = json.loads(raw)
-    except Exception:
+    except (json.JSONDecodeError, TypeError):
         return {}
     return value if isinstance(value, dict) else {}
 
 
 def _build_parser() -> argparse.ArgumentParser:
+    """Build the CLI argument parser."""
     parser = argparse.ArgumentParser(description="HackScript visualization host")
     parser.add_argument("track_path", help="Path to audio file")
     parser.add_argument("--width", type=int, default=80, help="Viewport width")
@@ -255,6 +259,7 @@ def _build_parser() -> argparse.ArgumentParser:
 
 
 def main(argv: list[str] | None = None) -> int:
+    """CLI entry point for running the generator in a terminal."""
     parser = _build_parser()
     args = parser.parse_args(argv)
     prefs = _parse_prefs(args.prefs)
@@ -263,9 +268,9 @@ def main(argv: list[str] | None = None) -> int:
     prefs["playback_state"] = args.state
     if "fps" not in prefs and args.fps:
         prefs["fps"] = args.fps
-    viewport = (max(1, args.width), max(1, args.height))
+    viewport = _normalize_viewport((args.width, args.height))
     track = Path(args.track_path).expanduser()
-    delay = 1.0 / max(1.0, float(prefs.get("fps", 20.0)))
+    delay = 1.0 / _get_fps_value(prefs.get("fps", 20.0), default=20.0)
     try:
         frames = run_generator(
             viz_name=args.viz,
@@ -283,5 +288,27 @@ def main(argv: list[str] | None = None) -> int:
     return 0
 
 
+def _normalize_viewport(viewport: tuple[int, int]) -> tuple[int, int]:
+    """Clamp viewport dimensions to positive integers."""
+    width = max(1, int(viewport[0]))
+    height = max(1, int(viewport[1]))
+    return width, height
+
+
+def _get_fps_value(value: Any, *, default: float) -> float:
+    """Convert a fps value to a positive float, with a fallback."""
+    try:
+        fps_value = float(value)
+    except (TypeError, ValueError):
+        fps_value = default
+    return max(1.0, fps_value)
+
+
+def _hold_ms_from_fps(fps_value: float) -> int:
+    """Convert fps to milliseconds per frame."""
+    return int(1000 / max(1.0, fps_value))
+
+
 if __name__ == "__main__":
     raise SystemExit(main())
+logger = logging.getLogger(__name__)

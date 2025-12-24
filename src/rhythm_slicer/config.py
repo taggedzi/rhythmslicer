@@ -90,7 +90,7 @@ def _ensure_dir(path: Path) -> Path:
 
 def _is_macos() -> bool:
     """Return True when running on macOS."""
-    return os.uname().sysname == "Darwin" if hasattr(os, "uname") else False # pyright: ignore[reportAttributeAccessIssue]
+    return os.uname().sysname == "Darwin" if hasattr(os, "uname") else False  # pyright: ignore[reportAttributeAccessIssue]
 
 
 def _get_bool(
