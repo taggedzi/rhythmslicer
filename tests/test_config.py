@@ -24,6 +24,18 @@ def test_load_defaults_when_corrupt(monkeypatch, tmp_path: Path) -> None:
     assert loaded == config.AppConfig()
 
 
+def test_load_defaults_when_read_fails(monkeypatch, tmp_path: Path) -> None:
+    config_path = tmp_path / "config.json"
+
+    def boom(*_args, **_kwargs) -> str:
+        raise OSError("nope")
+
+    monkeypatch.setattr(config, "get_config_path", lambda: config_path)
+    monkeypatch.setattr(Path, "read_text", boom)
+    loaded = config.load_config()
+    assert loaded == config.AppConfig()
+
+
 def test_save_load_round_trip(monkeypatch, tmp_path: Path) -> None:
     monkeypatch.setattr(config, "get_config_dir", lambda: tmp_path)
     original = config.AppConfig(
