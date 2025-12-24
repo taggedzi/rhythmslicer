@@ -66,7 +66,7 @@ def test_run_tui_handles_import_error(monkeypatch, capsys) -> None:
 
     def fake_import(name, *args, **kwargs):
         if name == "rhythm_slicer.tui":
-            raise RuntimeError("boom")
+            raise ImportError("boom")
         return original_import(name, *args, **kwargs)
 
     monkeypatch.setattr(builtins, "__import__", fake_import)
@@ -105,3 +105,35 @@ def test_main_handles_vlc_error(monkeypatch, capsys) -> None:
     exit_code = cli.main(["song.mp3"])
     assert exit_code == 1
     assert "missing" in capsys.readouterr().err
+
+
+def test_thread_exceptions_dump_threads(monkeypatch) -> None:
+    from types import SimpleNamespace
+    import threading
+
+    original_excepthook = threading.excepthook
+    calls: list[str] = []
+
+    def record_dump_threads(message: str) -> None:
+        calls.append(message)
+
+    monkeypatch.setattr(cli, "VlcPlayer", lambda: DummyPlayer())
+    monkeypatch.setattr(cli, "init_logging", lambda: Path("app.log"))
+    monkeypatch.setattr(cli, "enable_faulthandler", lambda _: Path("hangdump.log"))
+    monkeypatch.setattr(cli, "_run_tui", lambda *_args, **_kwargs: 0)
+    monkeypatch.setattr(cli, "dump_threads", record_dump_threads)
+
+    try:
+        cli.main([])
+        fake_thread = SimpleNamespace(name="worker")
+        fake_args = SimpleNamespace(
+            exc_type=RuntimeError,
+            exc_value=RuntimeError("boom"),
+            exc_traceback=None,
+            thread=fake_thread,
+        )
+        threading.excepthook(fake_args)
+    finally:
+        threading.excepthook = original_excepthook
+
+    assert calls == ["thread exception in worker"]
