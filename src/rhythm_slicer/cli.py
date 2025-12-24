@@ -37,7 +37,7 @@ def build_parser() -> argparse.ArgumentParser:
 def _run_tui(path: str, player: VlcPlayer, viz_name: Optional[str]) -> int:
     try:
         from rhythm_slicer.tui import run_tui
-    except RuntimeError as exc:
+    except (ImportError, RuntimeError) as exc:
         print(str(exc), file=sys.stderr)
         return 1
     return run_tui(path, player, viz_name=viz_name)
@@ -68,6 +68,7 @@ def main(argv: Optional[Iterable[str]] = None) -> int:
             )
             thread_name = args.thread.name if args.thread else "thread"
             logger.exception("Thread exception in %s", thread_name, exc_info=exc_info)
+            dump_threads(f"thread exception in {thread_name}")
 
         threading.excepthook = thread_hook
 
