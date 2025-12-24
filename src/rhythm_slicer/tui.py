@@ -659,6 +659,8 @@ class RhythmSlicerApp(App):
         self.set_interval(0.5, self._update_ui_tick)
         self.set_interval(10.0, self._log_heartbeat)
         self.call_later(self._finalize_visualizer_layout)
+        # Ensure the playlist table sizes itself once layout measurements are available.
+        self.set_timer(0.05, self._refresh_playlist_table_after_layout)
         self._apply_layout_constraints()
         self._update_status_panel(force=True)
         logger.info("TUI mounted")
@@ -1111,13 +1113,21 @@ class RhythmSlicerApp(App):
         self._playing_key = None
         self._selected_key = None
 
+    def _refresh_playlist_table_after_layout(self) -> None:
+        if self._playlist_table_content_width() <= 0:
+            self.set_timer(0.05, self._refresh_playlist_table_after_layout)
+            return
+        self._refresh_playlist_table(rebuild=True)
+
     def _playlist_row_key(self, index: int) -> str:
         return str(index)
 
     def _playlist_table_content_width(self) -> int:
         if not self._playlist_table:
             return 0
-        size = getattr(self._playlist_table, "size", None)
+        size = getattr(self._playlist_table, "content_size", None) or getattr(
+            self._playlist_table, "size", None
+        )
         width = getattr(size, "width", 0) if size else 0
         return max(0, width)
 
@@ -1127,9 +1137,24 @@ class RhythmSlicerApp(App):
             width = self._playlist_table_width or 40
         if not self._playlist_table:
             return width, 0, 0
-        artist_max = 18
-        safety_margin = 10
-        title_max = max(10, width - artist_max - safety_margin)
+        gutter = 6  # padding/scrollbar cushion to avoid a horizontal scrollbar
+        usable_width = width - gutter if width > gutter else width
+        if usable_width <= 0:
+            return width, 0, 0
+        min_title = 1 if usable_width > 0 else 0
+        min_artist = 1 if usable_width > 1 else 0
+        title_max = max(min_title, int(usable_width * 0.6))
+        artist_max = max(min_artist, usable_width - title_max)
+        total = title_max + artist_max
+        if total < usable_width:
+            artist_max += usable_width - total
+        elif total > usable_width:
+            overflow = total - usable_width
+            trim_title = min(overflow, max(0, title_max - min_title))
+            title_max -= trim_title
+            overflow -= trim_title
+            if overflow > 0:
+                artist_max = max(min_artist, artist_max - overflow)
         return width, title_max, artist_max
 
     def _playlist_row_cells(
@@ -2114,6 +2139,7 @@ class RhythmSlicerApp(App):
         self._update_playlist_view()
         self._update_visualizer_hud()
         self._update_status_panel(force=True)
+        self.set_timer(0.05, self._refresh_playlist_table_after_layout)
         if self._current_track_path:
             self._schedule_viz_restart(0.1)
         elif self._visualizer and not self._frame_player.is_running:
@@ -2780,9 +2806,9 @@ def ellipsize(text: str, max_len: int) -> str:
         return ""
     if len(text) <= max_len:
         return text
-    if max_len == 1:
-        return "…"
-    return text[: max_len - 1] + "…"
+    if max_len <= 3:
+        return "." * max_len
+    return text[: max_len - 3] + "..."
 
 
 def _parse_prompt_result(value: str) -> tuple[str, bool]:
