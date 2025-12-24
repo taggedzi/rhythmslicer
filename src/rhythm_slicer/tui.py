@@ -48,6 +48,7 @@ from rhythm_slicer.hackscript import HackFrame, generate as generate_hackscript
 from rhythm_slicer.hangwatch import HangWatchdog, dump_threads
 from rhythm_slicer.logging_setup import set_console_level
 from rhythm_slicer.ui.help_modal import HelpModal
+from rhythm_slicer.ui.playlist_builder import PlaylistBuilderScreen
 from rhythm_slicer.visualizations.ansi import sanitize_ansi_sgr
 from rhythm_slicer.metadata import (
     TrackMeta,
@@ -459,6 +460,7 @@ class RhythmSlicerApp(App):
         Binding("ctrl+shift+d", "dump_threads", "Dump Threads"),
         Binding("?", "show_help", "Help"),
         Binding("f1", "show_help", "Help"),
+        Binding("b", "playlist_builder", "Playlist Builder"),
         Binding("q", "quit_app", "Quit"),
     ]
 
@@ -1713,6 +1715,20 @@ class RhythmSlicerApp(App):
 
     def action_show_help(self) -> None:
         self.push_screen(HelpModal(self.BINDINGS))
+
+    def action_playlist_builder(self) -> None:
+        start_path = None
+        if self._current_track_path and self._current_track_path.exists():
+            start_path = self._current_track_path.parent
+        elif self._last_open_path and self._last_open_path.exists():
+            start_path = (
+                self._last_open_path
+                if self._last_open_path.is_dir()
+                else self._last_open_path.parent
+            )
+        else:
+            start_path = Path.cwd()
+        self.push_screen(PlaylistBuilderScreen(start_path))
 
     def on_shutdown(self) -> None:
         logger.info("TUI shutdown")

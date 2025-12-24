@@ -30,6 +30,7 @@ _SECTION_ACTIONS: dict[str, list[str]] = {
         "remove_selected",
         "save_playlist",
         "open",
+        "playlist_builder",
     ],
     "Visualizer": [
         "select_visualization",

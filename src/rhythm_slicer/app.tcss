@@ -421,3 +421,47 @@ HelpModal {
     color: $text;
     background: $panelA;
 }
+
+#builder_root {
+    layout: vertical;
+    width: 100%;
+    height: 1fr;
+}
+
+#builder_panes {
+    layout: horizontal;
+    width: 100%;
+    height: 1fr;
+}
+
+#builder_left_panel,
+#builder_right_panel {
+    width: 1fr;
+    height: 1fr;
+    layout: vertical;
+    border: round $cyan_dim;
+    border-title-color: $cyan_dim;
+    background: $panelA;
+    padding: 0;
+}
+
+#builder_right_panel {
+    border: round $magenta;
+    border-title-color: $magenta;
+    background: $panelB;
+}
+
+#builder_browser,
+#builder_playlist {
+    width: 100%;
+    height: 1fr;
+}
+
+#builder_hints {
+    height: 1;
+    width: 100%;
+    padding: 0 1;
+    background: $transport_bg;
+    color: $text_dim;
+    text-wrap: nowrap;
+}
