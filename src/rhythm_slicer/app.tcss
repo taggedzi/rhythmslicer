@@ -109,7 +109,9 @@ Header {
 }
 
 #track_panel {
-    height: 1fr;
+    height: 5;
+    min-height: 5;
+    max-height: 5;
     border: round $cyan_dim;
     border-title-color: $cyan_dim;
     background: $panelA;
@@ -166,6 +168,8 @@ Header {
     width: 100%;
     padding: 0 1;
     text-wrap: nowrap;
+    overflow-x: hidden;
+    overflow-y: hidden;
     content-align: left top;
     color: $text_dim;
 }
