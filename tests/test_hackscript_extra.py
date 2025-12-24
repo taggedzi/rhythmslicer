@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from pathlib import Path
+import builtins
 
 from types import SimpleNamespace
 
@@ -93,11 +94,13 @@ def test_generate_invalid_fps_defaults(monkeypatch) -> None:
     assert frame.hold_ms == 50
 
 
-def test_run_generator_falls_back_to_minimal(monkeypatch, capsys) -> None:
+def test_run_generator_falls_back_to_minimal(monkeypatch, caplog) -> None:
     def boom(_: str):
         raise RuntimeError("missing")
 
     monkeypatch.setattr(hackscript, "load_viz", boom)
+    monkeypatch.setattr(hackscript, "_extract_metadata", lambda _: {})
+    caplog.set_level("WARNING")
     frames = hackscript.run_generator(
         viz_name="missing",
         track_path=Path("song.mp3"),
@@ -106,16 +109,17 @@ def test_run_generator_falls_back_to_minimal(monkeypatch, capsys) -> None:
         seed=1,
     )
     assert "RhythmSlicer" in next(frames)
-    err = capsys.readouterr().err
-    assert "warning: failed to load viz" in err
+    assert "Failed to load viz 'missing'" in caplog.text
 
 
-def test_run_generator_warns_on_mismatch(monkeypatch, capsys) -> None:
+def test_run_generator_warns_on_mismatch(monkeypatch, caplog) -> None:
     plugin = SimpleNamespace(
         VIZ_NAME="other",
         generate_frames=lambda ctx: iter(["frame"]),
     )
     monkeypatch.setattr(hackscript, "load_viz", lambda _: plugin)
+    monkeypatch.setattr(hackscript, "_extract_metadata", lambda _: {})
+    caplog.set_level("WARNING")
     frames = hackscript.run_generator(
         viz_name="custom",
         track_path=Path("song.mp3"),
@@ -124,8 +128,7 @@ def test_run_generator_warns_on_mismatch(monkeypatch, capsys) -> None:
         seed=1,
     )
     assert next(frames) == "frame"
-    err = capsys.readouterr().err
-    assert "warning: viz 'custom' not found" in err
+    assert "Viz 'custom' not found" in caplog.text
 
 
 def test_extract_metadata_full(monkeypatch, tmp_path: Path) -> None:
@@ -165,15 +168,34 @@ def test_extract_metadata_full(monkeypatch, tmp_path: Path) -> None:
     assert meta["codec"] == "mp3"
 
 
-def test_extract_metadata_handles_errors(monkeypatch, tmp_path: Path) -> None:
+def test_extract_metadata_handles_errors(monkeypatch, caplog, tmp_path: Path) -> None:
     def fake_file(path: Path):
         raise RuntimeError("bad")
 
     monkeypatch.setitem(
         hackscript.sys.modules, "mutagen", SimpleNamespace(File=fake_file)
     )
+    caplog.set_level("WARNING")
     meta = hackscript._extract_metadata(tmp_path / "song.mp3")
     assert meta == {}
+    assert "Failed to read metadata" in caplog.text
+
+
+def test_extract_metadata_logs_missing_mutagen(
+    monkeypatch, caplog, tmp_path: Path
+) -> None:
+    original_import = builtins.__import__
+
+    def fake_import(name, *args, **kwargs):
+        if name == "mutagen":
+            raise ImportError("missing")
+        return original_import(name, *args, **kwargs)
+
+    monkeypatch.setattr(builtins, "__import__", fake_import)
+    caplog.set_level("WARNING")
+    meta = hackscript._extract_metadata(tmp_path / "song.mp3")
+    assert meta == {}
+    assert "mutagen is not installed" in caplog.text
 
 
 def test_main_writes_frames(monkeypatch, capsys) -> None:
