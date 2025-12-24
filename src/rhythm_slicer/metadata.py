@@ -10,6 +10,7 @@ from pathlib import Path
 class TrackMeta:
     artist: str | None
     title: str | None
+    album: str | None = None
 
 
 _TRACK_META_CACHE: dict[Path, TrackMeta] = {}
@@ -57,17 +58,18 @@ def read_track_meta(path: Path) -> TrackMeta:
     try:
         from mutagen import File as MutagenFile
     except Exception:
-        return TrackMeta(artist=None, title=None)
+        return TrackMeta(artist=None, title=None, album=None)
     try:
         audio = MutagenFile(path)
     except Exception:
-        return TrackMeta(artist=None, title=None)
+        return TrackMeta(artist=None, title=None, album=None)
     if not audio:
-        return TrackMeta(artist=None, title=None)
+        return TrackMeta(artist=None, title=None, album=None)
     tags = getattr(audio, "tags", None)
     artist = _read_tag(tags, ("artist", "ARTIST", "TPE1", "TPE2", "\xa9ART", "aART"))
     title = _read_tag(tags, ("title", "TITLE", "TIT2", "\xa9nam"))
-    return TrackMeta(artist=artist, title=title)
+    album = _read_tag(tags, ("album", "ALBUM", "TALB", "\xa9alb"))
+    return TrackMeta(artist=artist, title=title, album=album)
 
 
 def get_track_meta(path: Path) -> TrackMeta:
@@ -77,6 +79,10 @@ def get_track_meta(path: Path) -> TrackMeta:
     meta = read_track_meta(path)
     _TRACK_META_CACHE[path] = meta
     return meta
+
+
+def get_cached_track_meta(path: Path) -> TrackMeta | None:
+    return _TRACK_META_CACHE.get(path)
 
 
 def format_display_title(path: Path, meta: TrackMeta | None = None) -> str:
