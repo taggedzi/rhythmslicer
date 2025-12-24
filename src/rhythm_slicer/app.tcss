@@ -90,6 +90,40 @@ Header {
     height: 1fr;
 }
 
+#playlist_controls {
+    height: 1;
+    width: 100%;
+    padding: 0 1;
+    align: left middle;
+    background: $transport_bg;
+    text-wrap: nowrap;
+}
+
+#playlist_counter {
+    width: 1fr;
+    min-width: 9;
+    content-align: left middle;
+    color: $text_dim;
+    text-wrap: nowrap;
+}
+
+.playlist_toggle {
+    height: 1;
+    padding: 0 1;
+    margin: 0 0 0 1;
+    border: none;
+    background: #0b1017;
+    color: $cyan_dim;
+    min-width: 5;
+    content-align: center middle;
+}
+
+.playlist_toggle:hover,
+.playlist_toggle:focus {
+    background: #111826;
+    color: $cyan;
+}
+
 #legacy_controls {
     display: none;
 }
@@ -147,12 +181,7 @@ Header {
 
 #repeat_toggle,
 #shuffle_toggle {
-    height: 1;
-    padding: 0 1;
-    border: none;
-    background: $panel;
-    color: $accent;
-    min-width: 5;
+    text-wrap: nowrap;
 }
 
 #visualizer {
