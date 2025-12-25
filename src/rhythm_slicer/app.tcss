@@ -501,6 +501,18 @@ DrivePrompt {
     height: 1fr;
 }
 
+#builder_files_actions,
+#builder_playlist_actions {
+    height: 3;
+    width: 100%;
+    padding: 0 1;
+    align: left middle;
+}
+
+#builder_playlist_actions {
+    align: right middle;
+}
+
 #builder_hints {
     height: 1;
     width: 100%;

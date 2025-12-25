@@ -9,7 +9,7 @@ from typing import Optional
 from rich.text import Text
 from textual import events
 from textual.app import ComposeResult
-from textual.containers import Container, Horizontal
+from textual.containers import Container, Horizontal, Vertical
 from textual.screen import ModalScreen, Screen
 from textual.widgets import Button, DataTable, Select, Static
 
@@ -57,21 +57,33 @@ class PlaylistBuilderScreen(Screen):
             with Horizontal(id="builder_panes"):
                 yield _panel_wrapper(
                     "Files",
-                    DataTable(id="builder_browser"),
+                    Vertical(
+                        DataTable(id="builder_browser"),
+                        Horizontal(
+                            Button("Files: Select All", id="builder_files_select_all"),
+                            Button("Files: Clear", id="builder_files_clear"),
+                            id="builder_files_actions",
+                        ),
+                        id="builder_left_stack",
+                    ),
                     panel_id="builder_left_panel",
                 )
                 yield _panel_wrapper(
                     "Playlist",
-                    DataTable(id="builder_playlist"),
+                    Vertical(
+                        DataTable(id="builder_playlist"),
+                        Horizontal(
+                            Button(
+                                "Playlist: Select All",
+                                id="builder_playlist_select_all",
+                            ),
+                            Button("Playlist: Clear", id="builder_playlist_clear"),
+                            id="builder_playlist_actions",
+                        ),
+                        id="builder_right_stack",
+                    ),
                     panel_id="builder_right_panel",
                 )
-            
-            with Horizontal(id="builder_actions"):
-                yield Button("Files: Select All", id="builder_files_select_all")
-                yield Button("Files: Clear", id="builder_files_clear")
-                yield Button("Playlist: Select All", id="builder_playlist_select_all")
-                yield Button("Playlist: Clear", id="builder_playlist_clear")
-            
             yield Static("", id="builder_hints")
 
     def on_mount(self) -> None:
@@ -613,7 +625,7 @@ class PlaylistBuilderScreen(Screen):
             return path.absolute()
 
 
-def _panel_wrapper(title: str, child: DataTable, *, panel_id: str) -> Container:
+def _panel_wrapper(title: str, child: Container, *, panel_id: str) -> Container:
     panel = Container(child, id=panel_id)
     panel.border_title = title
     return panel
