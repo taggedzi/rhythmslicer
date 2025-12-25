@@ -53,6 +53,19 @@ _ACTION_OVERRIDES: dict[str, str] = {
     "show_help": "Open help",
 }
 
+_BUILDER_HELP: list[tuple[str, str]] = [
+    (
+        "Files pane",
+        "Up/Down Move | Enter/Right Open | Left Up | Space Select | "
+        "F5 Add | Ins Filter | Tab Switch | Esc Clear | b Back",
+    ),
+    (
+        "Playlist pane",
+        "Up/Down Move | Space Select | d Delete | u/j Move Up/Down | "
+        "s Save | S Save As | l Load | Tab Switch | Esc Clear | b Back",
+    ),
+]
+
 
 def _format_key(key: str) -> str:
     key_map = {
@@ -102,6 +115,12 @@ def build_help_text(bindings: Iterable[Binding]) -> Text:
             content.append(
                 "Logs — %LOCALAPPDATA%/RhythmSlicer/logs or ~/.rhythm_slicer/logs\n"
             )
+
+    if _BUILDER_HELP:
+        content.append("\n")
+        content.append("Playlist Builder\n", style="bold #5fc9d6")
+        for label, description in _BUILDER_HELP:
+            content.append(f"{label} — {description}\n")
 
     return content
 

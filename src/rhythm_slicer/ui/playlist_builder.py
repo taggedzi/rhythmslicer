@@ -34,7 +34,7 @@ class PlaylistBuilderScreen(Screen):
         "Space Select | F5 Add | Ins Filter | Tab Switch | Esc Clear | b Back"
     )
     PLAYLIST_HINTS = (
-        "Up/Down Move | Space Select | d Delete | u/j Move | "
+        "Up/Down Move | Space Select | d Delete | u/j Move Up/Down | "
         "s Save | S Save As | l Load | Tab Switch | Esc Clear | b Back"
     )
 
