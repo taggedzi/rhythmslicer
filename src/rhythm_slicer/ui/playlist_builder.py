@@ -30,11 +30,11 @@ class PlaylistBuilderScreen(Screen):
     """Two-pane playlist builder inspired by Midnight Commander."""
 
     BROWSER_HINTS = (
-        "Up/Down PgUp/PgDn Home/End Move | Enter/Right Open | Left Up | "
+        "Up/Down Move | Enter/Right Open | Left Up | "
         "Space Select | F5 Add | Ins Filter | Tab Switch | Esc Clear | b Back"
     )
     PLAYLIST_HINTS = (
-        "Up/Down PgUp/PgDn Home/End Move | Space Select | d Delete | u/j Move | "
+        "Up/Down Move | Space Select | d Delete | u/j Move | "
         "s Save | S Save As | l Load | Tab Switch | Esc Clear | b Back"
     )
 
