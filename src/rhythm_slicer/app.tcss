@@ -516,6 +516,10 @@ DrivePrompt {
 #builder_files_actions Button,
 #builder_playlist_actions Button {
     margin-right: 1;
+    min-width: 6;
+    height: 3;
+    padding: 0 1;
+    content-align: center middle;
 }
 
 #builder_hints {
