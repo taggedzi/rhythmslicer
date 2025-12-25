@@ -5,6 +5,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 import os
 from pathlib import Path
+import sys
 from typing import Iterable, Iterator, Literal, TypeVar
 
 from rhythm_slicer.metadata import format_display_title, get_track_meta
@@ -88,6 +89,9 @@ class FileBrowserModel:
     def is_selected(self, path: Path) -> bool:
         return path in self._selection
 
+    def is_at_root(self) -> bool:
+        return self._parent_path(self._current) == self._current
+
     @staticmethod
     def _normalize_start(path: Path) -> Path:
         if path.exists() and path.is_dir():
@@ -121,6 +125,33 @@ def build_track_from_path(path: Path) -> Track:
     meta = get_track_meta(path)
     title = format_display_title(path, meta)
     return Track(path=path, title=title)
+
+
+def list_drives() -> list[Path]:
+    """Return available drive roots for the current platform."""
+    if sys.platform.startswith("win"):
+        drives: list[Path] = []
+        for letter in "ABCDEFGHIJKLMNOPQRSTUVWXYZ":
+            path = Path(f"{letter}:/")
+            if path.exists():
+                drives.append(path)
+        return drives
+    roots = [Path("/")]
+    candidates = [Path("/Volumes"), Path("/mnt"), Path("/media"), Path("/run/media")]
+    for base in candidates:
+        if not base.exists() or not base.is_dir():
+            continue
+        for entry in base.iterdir():
+            if entry.is_dir():
+                roots.append(entry)
+    seen: set[Path] = set()
+    unique: list[Path] = []
+    for path in roots:
+        if path in seen:
+            continue
+        seen.add(path)
+        unique.append(path)
+    return unique
 
 
 T = TypeVar("T")

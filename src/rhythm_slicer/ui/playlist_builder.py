@@ -3,14 +3,15 @@
 from __future__ import annotations
 
 from pathlib import Path
+import time
 from typing import Optional
 
 from rich.text import Text
 from textual import events
 from textual.app import ComposeResult
 from textual.containers import Container, Horizontal
-from textual.screen import Screen
-from textual.widgets import DataTable, Static
+from textual.screen import ModalScreen, Screen
+from textual.widgets import Button, DataTable, Select, Static
 
 from rhythm_slicer.metadata import get_track_meta
 from rhythm_slicer.playlist import Playlist, Track
@@ -19,6 +20,7 @@ from rhythm_slicer.playlist_builder import (
     FileBrowserModel,
     build_track_from_path,
     collect_audio_files,
+    list_drives,
     reorder_items,
 )
 from rhythm_slicer.playlist_io import save_m3u8
@@ -29,11 +31,11 @@ class PlaylistBuilderScreen(Screen):
 
     BROWSER_HINTS = (
         "Up/Down PgUp/PgDn Home/End Move | Enter/Right Open | Left Up | "
-        "Space Select | F5 Add | Tab Switch | Esc Clear | b Back"
+        "Space Select | F5 Add | Ins Filter | Tab Switch | Esc Clear | b Back"
     )
     PLAYLIST_HINTS = (
-        "Up/Down PgUp/PgDn Home/End Move | Space Select | Enter Play | d Delete | "
-        "u/j Move | s Save | S Save As | l Load | Tab Switch | Esc Clear | b Back"
+        "Up/Down PgUp/PgDn Home/End Move | Space Select | d Delete | u/j Move | "
+        "s Save | S Save As | l Load | Tab Switch | Esc Clear | b Back"
     )
 
     def __init__(self, start_path: Path) -> None:
@@ -44,6 +46,11 @@ class PlaylistBuilderScreen(Screen):
         self._playlist_table: Optional[DataTable] = None
         self._playlist_selection: set[int] = set()
         self._focused_pane = "browser"
+        self._filter_active = False
+        self._filter_text = ""
+        self._last_browser_click_time = 0.0
+        self._last_browser_click_row: Optional[int] = None
+        self._last_enter_nav_time = 0.0
 
     def compose(self) -> ComposeResult:
         with Container(id="builder_root"):
@@ -58,6 +65,13 @@ class PlaylistBuilderScreen(Screen):
                     DataTable(id="builder_playlist"),
                     panel_id="builder_right_panel",
                 )
+            
+            with Horizontal(id="builder_actions"):
+                yield Button("Files: Select All", id="builder_files_select_all")
+                yield Button("Files: Clear", id="builder_files_clear")
+                yield Button("Playlist: Select All", id="builder_playlist_select_all")
+                yield Button("Playlist: Clear", id="builder_playlist_clear")
+            
             yield Static("", id="builder_hints")
 
     def on_mount(self) -> None:
@@ -78,8 +92,59 @@ class PlaylistBuilderScreen(Screen):
             self._focused_pane = "playlist"
         self._update_hints()
 
+    def on_button_pressed(self, event: Button.Pressed) -> None:
+        button_id = event.button.id
+        if button_id == "builder_files_select_all":
+            self._browser.clear_selection()
+            for entry in self._browser_entries:
+                if entry.is_parent:
+                    continue
+                self._browser.toggle_selection(entry)
+            self._refresh_browser_entries()
+            return
+        if button_id == "builder_files_clear":
+            self._browser.clear_selection()
+            self._refresh_browser_entries()
+            return
+        if button_id == "builder_playlist_select_all":
+            playlist = self._ensure_playlist()
+            self._playlist_selection = set(range(len(playlist.tracks)))
+            self._refresh_playlist_entries()
+            return
+        if button_id == "builder_playlist_clear":
+            self._playlist_selection.clear()
+            self._refresh_playlist_entries()
+            return
+
     def on_key(self, event: events.Key) -> None:
         key = event.key
+        if key in {"pageup", "pagedown"}:
+            event.stop()
+            return
+        if self._focused_pane == "browser" and self._filter_active:
+            if key in {"escape"}:
+                self._filter_active = False
+                self._filter_text = ""
+                self._refresh_browser_entries()
+                event.stop()
+                return
+            if key in {"enter"}:
+                self._filter_active = False
+                self._update_hints()
+                event.stop()
+                return
+            if key in {"backspace", "delete"}:
+                if self._filter_text:
+                    self._filter_text = self._filter_text[:-1]
+                    self._refresh_browser_entries()
+                event.stop()
+                return
+            char = event.character
+            if char and len(char) == 1 and char.isprintable():
+                self._filter_text += char
+                self._refresh_browser_entries()
+                event.stop()
+                return
         if key == "tab":
             # Tab swaps focus; only the focused pane handles navigation/actions.
             self._toggle_focus()
@@ -94,7 +159,14 @@ class PlaylistBuilderScreen(Screen):
             event.stop()
             return
         if self._focused_pane == "browser":
+            if key == "insert":
+                self._filter_active = True
+                self._filter_text = ""
+                self._refresh_browser_entries()
+                event.stop()
+                return
             if key in {"enter", "right"}:
+                self._last_enter_nav_time = time.monotonic()
                 self._enter_directory()
                 event.stop()
                 return
@@ -116,7 +188,6 @@ class PlaylistBuilderScreen(Screen):
                 event.stop()
                 return
             if key == "enter":
-                self._play_selected_track()
                 event.stop()
                 return
             if key == "d":
@@ -174,11 +245,14 @@ class PlaylistBuilderScreen(Screen):
             self.set_focus(self._browser_table)
 
     def _update_hints(self) -> None:
-        hint = (
-            self.BROWSER_HINTS
-            if self._focused_pane == "browser"
-            else self.PLAYLIST_HINTS
-        )
+        if self._focused_pane == "browser" and self._filter_active:
+            hint = f"Filter: {self._filter_text or '...'}"
+        else:
+            hint = (
+                self.BROWSER_HINTS
+                if self._focused_pane == "browser"
+                else self.PLAYLIST_HINTS
+            )
         hint_widget = self.query_one("#builder_hints", Static)
         hint_widget.update(hint)
 
@@ -186,13 +260,24 @@ class PlaylistBuilderScreen(Screen):
         if not self._browser_table:
             return
         current_row = self._browser_table.cursor_row or 0
-        self._browser_entries = self._browser.list_entries()
+        entries = self._browser.list_entries()
+        if self._filter_text:
+            filtered = [entries[0]]
+            filtered.extend(
+                entry
+                for entry in entries[1:]
+                if self._entry_matches_filter(entry, self._filter_text)
+            )
+            self._browser_entries = filtered
+        else:
+            self._browser_entries = entries
         self._browser_table.clear()
         for entry in self._browser_entries:
             text = self._browser_row_text(entry)
             self._browser_table.add_row(text, key=str(entry.path))
         self._restore_cursor(self._browser_table, current_row)
         self._update_browser_title()
+        self._update_hints()
 
     def _browser_row_text(self, entry: BrowserEntry) -> Text:
         if entry.is_parent:
@@ -206,6 +291,8 @@ class PlaylistBuilderScreen(Screen):
     def _update_browser_title(self) -> None:
         panel = self.query_one("#builder_left_panel", Container)
         title = f"Files: {self._browser.current_path}"
+        if self._filter_text:
+            title = f"{title} | Filter: {self._filter_text}"
         panel.border_title = title
 
     def _refresh_playlist_entries(self) -> None:
@@ -260,12 +347,18 @@ class PlaylistBuilderScreen(Screen):
         if entry is None:
             return
         if entry.is_parent:
+            if self._browser.is_at_root():
+                self.app.run_worker(self._drive_picker_flow(), exclusive=True)
+                return
             self._browser.change_directory(entry.path)
         elif entry.is_dir:
             self._browser.change_directory(entry.path)
         self._refresh_browser_entries()
 
     def _go_up(self) -> None:
+        if self._browser.is_at_root():
+            self.app.run_worker(self._drive_picker_flow(), exclusive=True)
+            return
         if self._browser.go_up():
             self._refresh_browser_entries()
 
@@ -282,23 +375,7 @@ class PlaylistBuilderScreen(Screen):
         selected = self._browser.selected_paths()
         if not selected:
             return
-        playlist = self._ensure_playlist()
-        existing = {self._resolve_path(track.path) for track in playlist.tracks}
-        new_paths = []
-        for path in collect_audio_files(selected):
-            resolved = self._resolve_path(path)
-            if resolved in existing:
-                continue
-            existing.add(resolved)
-            new_paths.append(path)
-        if not new_paths:
-            return
-        added_tracks = [build_track_from_path(path) for path in new_paths]
-        playlist.tracks.extend(added_tracks)
-        if playlist.index < 0:
-            playlist.index = 0
-        self._refresh_playlist_after_edit()
-        self._refresh_playlist_entries()
+        self._add_paths_to_playlist(selected)
 
     def _toggle_playlist_selection(self) -> None:
         index = self._focused_playlist_index()
@@ -310,25 +387,21 @@ class PlaylistBuilderScreen(Screen):
             self._playlist_selection.add(index)
         self._refresh_playlist_entries()
 
-    def _play_selected_track(self) -> None:
-        playlist = self._ensure_playlist()
-        index = self._focused_playlist_index()
-        if index is None or index >= len(playlist.tracks):
-            return
-        playlist.set_index(index)
-        if hasattr(self.app, "_play_selected"):
-            self.app._play_selected()
-
     def _remove_selected_tracks(self) -> None:
         playlist = self._ensure_playlist()
         if playlist.is_empty():
             return
         if not self._playlist_selection:
             return
+        tracks = getattr(playlist, "tracks", None)
+        if not isinstance(tracks, list):
+            raise RuntimeError(
+                "PlaylistBuilderScreen expected playlist.tracks to be a list."
+            )
         playing_path = self._current_playing_path()
         for index in sorted(self._playlist_selection, reverse=True):
-            if 0 <= index < len(playlist.tracks):
-                playlist.remove(index)
+            if 0 <= index < len(tracks):
+                tracks.pop(index)
         self._playlist_selection.clear()
         self._reconcile_playing_index(playing_path)
         playlist.clamp_index()
@@ -399,6 +472,18 @@ class PlaylistBuilderScreen(Screen):
         self._playlist_selection.clear()
         self._refresh_playlist_entries()
 
+    async def _drive_picker_flow(self) -> None:
+        drives = list_drives()
+        if not drives:
+            if hasattr(self.app, "_set_message"):
+                self.app._set_message("No drives detected", level="warn")
+            return
+        result = await self.app.push_screen_wait(DrivePrompt(drives))
+        if not result:
+            return
+        self._browser.change_directory(result)
+        self._refresh_browser_entries()
+
     def _refresh_playlist_after_edit(self) -> None:
         if hasattr(self.app, "_reset_play_order"):
             self.app._reset_play_order()
@@ -437,6 +522,89 @@ class PlaylistBuilderScreen(Screen):
             self.app.playlist = Playlist([])
         return self.app.playlist
 
+    def _entry_matches_filter(self, entry: BrowserEntry, needle: str) -> bool:
+        if entry.is_parent:
+            return True
+        lowered = needle.casefold()
+        if lowered in entry.name.casefold():
+            return True
+        if entry.is_dir:
+            return False
+        meta = get_track_meta(entry.path)
+        title = meta.title or ""
+        artist = meta.artist or ""
+        combined = f"{title} {artist}".casefold()
+        return lowered in combined
+
+    def _add_paths_to_playlist(self, paths: list[Path]) -> None:
+        playlist = self._ensure_playlist()
+        existing = {self._resolve_path(track.path) for track in playlist.tracks}
+        new_paths = []
+        for path in collect_audio_files(paths):
+            resolved = self._resolve_path(path)
+            if resolved in existing:
+                continue
+            existing.add(resolved)
+            new_paths.append(path)
+        if not new_paths:
+            return
+        added_tracks = [build_track_from_path(path) for path in new_paths]
+        playlist.tracks.extend(added_tracks)
+        if playlist.index < 0:
+            playlist.index = 0
+        self._refresh_playlist_after_edit()
+        self._refresh_playlist_entries()
+
+    def on_data_table_row_selected(self, event: DataTable.RowSelected) -> None:
+        if event.data_table is self._browser_table:
+            self._focused_pane = "browser"
+            self.set_focus(self._browser_table)
+        elif event.data_table is self._playlist_table:
+            self._focused_pane = "playlist"
+            self.set_focus(self._playlist_table)
+        event.stop()
+        # Browser pane: mouse click toggles selection (like Space)
+        if event.data_table is self._browser_table:
+            entry = self._focused_browser_entry()
+            if entry is None or entry.is_parent:
+                return
+
+            # Keep it simple for Stage 1: click toggles selection without clearing others.
+            # (Shift-range / single-select behavior can be Stage 3 if you want.)
+            self._browser.toggle_selection(entry)
+            self._refresh_browser_entries()
+            return
+
+        # Playlist pane: mouse click toggles selection
+        if event.data_table is self._playlist_table:
+            index = self._focused_playlist_index()
+            if index is None:
+                return
+            if index in self._playlist_selection:
+                self._playlist_selection.remove(index)
+            else:
+                self._playlist_selection.add(index)
+            self._refresh_playlist_entries()
+            return
+
+    def on_data_table_row_highlighted(self, event: DataTable.RowHighlighted) -> None:
+        if event.data_table is self._browser_table:
+            self._focused_pane = "browser"
+            self.set_focus(self._browser_table)
+        elif event.data_table is self._playlist_table:
+            self._focused_pane = "playlist"
+            self.set_focus(self._playlist_table)
+        event.stop()
+
+    def on_data_table_cell_selected(self, event: DataTable.CellSelected) -> None:
+        if event.data_table is self._browser_table:
+            self._focused_pane = "browser"
+            self.set_focus(self._browser_table)
+        elif event.data_table is self._playlist_table:
+            self._focused_pane = "playlist"
+            self.set_focus(self._playlist_table)
+        event.stop()
+
     @staticmethod
     def _resolve_path(path: Path) -> Path:
         try:
@@ -449,3 +617,36 @@ def _panel_wrapper(title: str, child: DataTable, *, panel_id: str) -> Container:
     panel = Container(child, id=panel_id)
     panel.border_title = title
     return panel
+
+
+class DrivePrompt(ModalScreen[Optional[Path]]):
+    """Modal prompt for selecting a drive/root."""
+
+    def __init__(self, drives: list[Path]) -> None:
+        super().__init__()
+        self._drives = drives
+
+    def compose(self) -> ComposeResult:
+        options = [(str(path), str(path)) for path in self._drives]
+        with Container(id="drive_prompt"):
+            yield Static("Select Drive", id="drive_prompt_title")
+            yield Select(options, id="drive_prompt_select")
+            with Horizontal(id="drive_prompt_buttons"):
+                yield Button("Connect", id="drive_prompt_ok")
+                yield Button("Cancel", id="drive_prompt_cancel")
+
+    def on_mount(self) -> None:
+        select = self.query_one("#drive_prompt_select", Select)
+        self.set_focus(select)
+
+    def on_button_pressed(self, event: Button.Pressed) -> None:
+        if event.button.id == "drive_prompt_cancel":
+            self.dismiss(None)
+            return
+        if event.button.id == "drive_prompt_ok":
+            select = self.query_one("#drive_prompt_select", Select)
+            value = select.value
+            if value:
+                self.dismiss(Path(str(value)))
+            else:
+                self.dismiss(None)
