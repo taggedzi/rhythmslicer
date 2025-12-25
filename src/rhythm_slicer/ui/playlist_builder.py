@@ -104,6 +104,17 @@ class PlaylistBuilderScreen(Screen):
             self._focused_pane = "browser"
         elif event.widget is self._playlist_table:
             self._focused_pane = "playlist"
+        elif isinstance(event.widget, Button):
+            button_id = event.widget.id or ""
+            if button_id in {"builder_files_select_all", "builder_files_clear"}:
+                self._focused_pane = "browser"
+            elif button_id in {
+                "builder_playlist_select_all",
+                "builder_playlist_clear",
+                "builder_playlist_save",
+                "builder_playlist_load",
+            }:
+                self._focused_pane = "playlist"
         self._update_hints()
 
     def on_button_pressed(self, event: Button.Pressed) -> None:
@@ -141,6 +152,11 @@ class PlaylistBuilderScreen(Screen):
         if key in {"pageup", "pagedown"}:
             event.stop()
             return
+        try:
+            focused = self.focused
+        except Exception:
+            focused = None
+        is_table_focus = focused in {self._browser_table, self._playlist_table}
         if self._focused_pane == "browser" and self._filter_active:
             if key in {"escape"}:
                 self._filter_active = False
@@ -165,11 +181,6 @@ class PlaylistBuilderScreen(Screen):
                 self._refresh_browser_entries()
                 event.stop()
                 return
-        if key == "tab":
-            # Tab swaps focus; only the focused pane handles navigation/actions.
-            self._toggle_focus()
-            event.stop()
-            return
         if key == "b":
             self.app.pop_screen()
             event.stop()
@@ -177,6 +188,8 @@ class PlaylistBuilderScreen(Screen):
         if key == "escape":
             self._clear_selection()
             event.stop()
+            return
+        if not is_table_focus:
             return
         if self._focused_pane == "browser":
             if key == "insert":
