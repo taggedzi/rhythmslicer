@@ -78,6 +78,8 @@ class PlaylistBuilderScreen(Screen):
                                 id="builder_playlist_select_all",
                             ),
                             Button("Playlist: Clear", id="builder_playlist_clear"),
+                            Button("Playlist: Save", id="builder_playlist_save"),
+                            Button("Playlist: Load", id="builder_playlist_load"),
                             id="builder_playlist_actions",
                         ),
                         id="builder_right_stack",
@@ -126,6 +128,12 @@ class PlaylistBuilderScreen(Screen):
         if button_id == "builder_playlist_clear":
             self._playlist_selection.clear()
             self._refresh_playlist_entries()
+            return
+        if button_id == "builder_playlist_save":
+            self._save_playlist(force_prompt=False)
+            return
+        if button_id == "builder_playlist_load":
+            self._load_playlist()
             return
 
     def on_key(self, event: events.Key) -> None:
