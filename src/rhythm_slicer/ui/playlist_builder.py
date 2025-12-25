@@ -60,8 +60,8 @@ class PlaylistBuilderScreen(Screen):
                     Vertical(
                         DataTable(id="builder_browser"),
                         Horizontal(
-                            Button("Files: Select All", id="builder_files_select_all"),
-                            Button("Files: Clear", id="builder_files_clear"),
+                            Button("Select All", id="builder_files_select_all"),
+                            Button("Clear", id="builder_files_clear"),
                             id="builder_files_actions",
                         ),
                         id="builder_left_stack",
@@ -74,12 +74,12 @@ class PlaylistBuilderScreen(Screen):
                         DataTable(id="builder_playlist"),
                         Horizontal(
                             Button(
-                                "Playlist: Select All",
+                                "Select All",
                                 id="builder_playlist_select_all",
                             ),
-                            Button("Playlist: Clear", id="builder_playlist_clear"),
-                            Button("Playlist: Save", id="builder_playlist_save"),
-                            Button("Playlist: Load", id="builder_playlist_load"),
+                            Button("Clear", id="builder_playlist_clear"),
+                            Button("Save", id="builder_playlist_save"),
+                            Button("Load", id="builder_playlist_load"),
                             id="builder_playlist_actions",
                         ),
                         id="builder_right_stack",
