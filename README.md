@@ -1,11 +1,25 @@
 # RhythmSlicer Pro
 
-[![CI](https://github.com/OWNER/REPO/actions/workflows/ci.yml/badge.svg)](https://github.com/OWNER/REPO/actions/workflows/ci.yml)
+![Python](https://img.shields.io/badge/Python-3.9%20–%203.12-blue?logo=python&logoColor=white)
+![License](https://img.shields.io/github/license/taggedzi/rhythmslicer)
+![CI](https://img.shields.io/github/actions/workflow/status/taggedzi/rhythmslicer/ci.yml?branch=main)
+
+![Interface](https://img.shields.io/badge/interface-Terminal%20UI-black)
+![Built with Textual](https://img.shields.io/badge/built%20with-Textual-purple)
+![Keyboard First](https://img.shields.io/badge/interaction-keyboard--first-success)
+
+![Status](https://img.shields.io/badge/status-active%20development-yellow)
+![Domain](https://img.shields.io/badge/domain-audio%20%26%20music-blue)
+![Playlist](https://img.shields.io/badge/feature-playlist%20builder-informational)
+
+
 
 RhythmSlicer Pro is a cross-platform CLI + Textual TUI music player with
 playlist management and built-in ASCII visualizers powered by the VLC backend.
 
 ![RhythmSlicer TUI](docs/screenshots/ui.png)
+
+![RhythmSlicer TUI Playlist Builder](docs/screenshots/playlist_builder.png)
 
 ## Requirements
 
@@ -39,22 +53,23 @@ pip install -e .
 
 ```bash
 r-slicer
-r-slicer path/to/file.mp3
 ```
 
 ## Development
 
 ```bash
 pip install nox
+nox -s lint-fix
 nox -s lint
 nox -s tests
 nox -s build
+nox -s coverage
 ```
 
 ## CLI options
 
-```
-r-slicer [path] [--viz <name>]
+```bash
+r-slicer
 ```
 
 ## Usage
