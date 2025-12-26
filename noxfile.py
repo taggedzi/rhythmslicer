@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
+import sys
 import nox
 
 
@@ -75,3 +76,77 @@ def coverage(session: nox.Session) -> None:
     session.install("coverage")
     session.run("coverage", "run", "--source=rhythm_slicer", "-m", "pytest")
     session.run("coverage", "report", "--fail-under=80", "-m")
+
+
+# --------------------------------------------------
+#                  LOCAL DEV TESTING
+# --------------------------------------------------
+
+
+@nox.session(name="lint-fix-dev", venv_backend="none")
+def lint_fix_dev(session: nox.Session) -> None:
+    """Apply ruff fixes and formatting."""
+    session.run("python", "-m", "ruff", "check", "--fix", ".", external=True)
+    session.run("python", "-m", "ruff", "format", ".", external=True)
+
+
+@nox.session(name="lint-dev", venv_backend="none")
+def lint_dev(session: nox.Session) -> None:
+    """Fast local lint using active venv."""
+    session.run("python", "-m", "ruff", "check", ".", external=True)
+    session.run("python", "-m", "ruff", "format", "--check", ".", external=True)
+
+
+@nox.session(name="tests-dev", venv_backend="none")
+def tests_dev(session: nox.Session) -> None:
+    """Fast local pytest using active venv."""
+    session.run("python", "-m", "pytest", "-q", external=True)
+
+
+@nox.session(name="typecheck-dev", venv_backend="none")
+def typecheck_dev(session: nox.Session) -> None:
+    """Fast local mypy using active venv."""
+    if not _has_mypy_config():
+        session.skip("mypy config not found")
+    session.run("python", "-m", "mypy", "src/rhythm_slicer", external=True)
+
+
+@nox.session(name="coverage-dev", venv_backend="none")
+def coverage_dev(session: nox.Session) -> None:
+    """Fast local coverage using active venv."""
+    session.run(
+        "python",
+        "-m",
+        "coverage",
+        "run",
+        "--source=rhythm_slicer",
+        "-m",
+        "pytest",
+        external=True,
+    )
+    session.run(
+        "python",
+        "-m",
+        "coverage",
+        "report",
+        "--fail-under=80",
+        "-m",
+        external=True,
+    )
+
+
+@nox.session(name="local-dev", venv_backend="none")
+def local_dev(session: nox.Session) -> None:
+    """Run the fast local dev checks (lint, typecheck, tests, coverage)."""
+    session.run(
+        sys.executable,
+        "-m",
+        "nox",
+        "-s",
+        "lint-fix-dev",
+        "lint-dev",
+        "typecheck-dev",
+        "tests-dev",
+        "coverage-dev",
+        external=True,
+    )
