@@ -11,6 +11,7 @@ from textual import events
 from textual.app import ComposeResult
 from textual.containers import Container, Horizontal, Vertical
 from textual.screen import ModalScreen, Screen
+from textual.widget import Widget
 from textual.widgets import Button, DataTable, Select, Static
 
 from rhythm_slicer.metadata import get_track_meta
@@ -100,12 +101,13 @@ class PlaylistBuilderScreen(Screen):
             self.set_focus(self._browser_table)
 
     def on_focus(self, event: events.Focus) -> None:
-        if event.widget is self._browser_table:
+        focused = self.focused
+        if focused is self._browser_table:
             self._focused_pane = "browser"
-        elif event.widget is self._playlist_table:
+        elif focused is self._playlist_table:
             self._focused_pane = "playlist"
-        elif isinstance(event.widget, Button):
-            button_id = event.widget.id or ""
+        elif isinstance(focused, Button):
+            button_id = focused.id or ""
             if button_id in {"builder_files_select_all", "builder_files_clear"}:
                 self._focused_pane = "browser"
             elif button_id in {
@@ -501,7 +503,10 @@ class PlaylistBuilderScreen(Screen):
             self.app.run_worker(self._load_playlist_worker(), exclusive=True)
 
     async def _load_playlist_worker(self) -> None:
-        await self.app._load_playlist_flow()
+        load_flow = getattr(self.app, "_load_playlist_flow", None)
+        if not callable(load_flow):
+            return
+        await load_flow()
         self._playlist_selection.clear()
         self._refresh_playlist_entries()
 
@@ -546,14 +551,16 @@ class PlaylistBuilderScreen(Screen):
             return
         for index, track in enumerate(playlist.tracks):
             if track.path == playing_path:
-                self.app._playing_index = index
+                setattr(self.app, "_playing_index", index)
                 return
-        self.app._playing_index = None
+        setattr(self.app, "_playing_index", None)
 
     def _ensure_playlist(self) -> Playlist:
-        if getattr(self.app, "playlist", None) is None:
-            self.app.playlist = Playlist([])
-        return self.app.playlist
+        playlist = getattr(self.app, "playlist", None)
+        if playlist is None:
+            playlist = Playlist([])
+            setattr(self.app, "playlist", playlist)
+        return playlist
 
     def _entry_matches_filter(self, entry: BrowserEntry, needle: str) -> bool:
         if entry.is_parent:
@@ -646,7 +653,7 @@ class PlaylistBuilderScreen(Screen):
             return path.absolute()
 
 
-def _panel_wrapper(title: str, child: Container, *, panel_id: str) -> Container:
+def _panel_wrapper(title: str, child: Widget, *, panel_id: str) -> Container:
     panel = Container(child, id=panel_id)
     panel.border_title = title
     return panel
