@@ -18,6 +18,7 @@ class FakeMediaPlayer:
         self.media = None
         self.volume = None
         self.time = 0
+        self.rate = 1.0
 
     def set_media(self, media: str) -> None:
         self.media = media
@@ -48,6 +49,13 @@ class FakeMediaPlayer:
 
     def set_position(self, value: float) -> None:
         self.position = value
+
+    def set_rate(self, rate: float) -> int:
+        self.rate = rate
+        return 0
+
+    def get_rate(self) -> float:
+        return self.rate
 
 
 class FakeInstance:
@@ -188,6 +196,38 @@ def test_player_controls_and_end_reached(monkeypatch: pytest.MonkeyPatch) -> Non
     player.signal_end_reached()
     assert player.consume_end_reached() is True
     assert player.consume_end_reached() is False
+
+
+def test_player_playback_rate_round_trip(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(player_vlc, "vlc", FakeVlc)
+    monkeypatch.setattr(player_vlc, "_VLC_IMPORT_ERROR", None)
+    player = player_vlc.VlcPlayer()
+    assert player.set_playback_rate(1.5) is True
+    assert player.get_playback_rate() == 1.5
+
+
+def test_player_playback_rate_errors(monkeypatch: pytest.MonkeyPatch) -> None:
+    class ErrorPlayer(FakeMediaPlayer):
+        def set_rate(self, rate: float) -> int:  # type: ignore[override]
+            raise RuntimeError("bad")
+
+        def get_rate(self):  # type: ignore[override]
+            return -1
+
+    class ErrorInstance(FakeInstance):
+        def media_player_new(self) -> ErrorPlayer:  # type: ignore[override]
+            return ErrorPlayer()
+
+    class ErrorVlc:
+        @staticmethod
+        def Instance() -> ErrorInstance:
+            return ErrorInstance()
+
+    monkeypatch.setattr(player_vlc, "vlc", ErrorVlc)
+    monkeypatch.setattr(player_vlc, "_VLC_IMPORT_ERROR", None)
+    player = player_vlc.VlcPlayer()
+    assert player.set_playback_rate(1.25) is False
+    assert player.get_playback_rate() is None
 
 
 def test_attach_end_reached_event_skips_when_missing_vlc(
