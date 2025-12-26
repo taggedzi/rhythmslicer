@@ -10,7 +10,7 @@ import math
 import random
 from pathlib import Path
 import time
-from typing import Callable, Iterator, Optional
+from typing import Any, Callable, Iterator, Optional, cast
 import logging
 from typing_extensions import TypeAlias
 
@@ -19,21 +19,27 @@ try:
     from textual.binding import Binding
     from textual.containers import Container, Horizontal, Vertical
     from textual import events
+    from textual.geometry import Region
     from textual.screen import ModalScreen
     from textual.widgets import Button, DataTable, Header, Input, Static
     from textual.widgets.data_table import RowDoesNotExist
+    from textual.timer import Timer
+    from textual.widget import Widget
     from rich.text import Text
+    import textual.widgets as textual_widgets
 
-    try:
-        from textual.widgets import Panel as TextualPanel
-    except Exception:
-        TextualPanel = None
+    TextualPanel = getattr(textual_widgets, "Panel", None)
 
     class PanelFallback(Container):
         def __init__(
-            self, *children: object, title: str | None = None, **kwargs: object
+            self,
+            *children: Widget,
+            title: str | None = None,
+            id: str | None = None,
+            classes: str | None = None,
+            disabled: bool = False,
         ) -> None:
-            super().__init__(*children, **kwargs)
+            super().__init__(*children, id=id, classes=classes, disabled=disabled)
             if title:
                 self.border_title = title
 
@@ -158,7 +164,7 @@ class FramePlayer:
     def __init__(self, app: "RhythmSlicerApp") -> None:
         self._app = app
         self._frames: Optional[Iterator[HackFrame]] = None
-        self._timer = None
+        self._timer: Optional[Timer] = None
 
     def start(
         self,
@@ -217,9 +223,6 @@ class VisualizerHud(Static):
 class PlaylistTable(DataTable):
     """Playlist table with double-click play behavior."""
 
-    def __init__(self, **kwargs: object) -> None:
-        super().__init__(**kwargs)
-
     async def _on_click(self, event: events.Click) -> None:
         if hasattr(self.app, "_set_user_navigation_lockout"):
             self.app._set_user_navigation_lockout()
@@ -239,6 +242,9 @@ class PlaylistTable(DataTable):
 class TransportControls(Static):
     """Transport controls for the playlist pane."""
 
+    def _app(self) -> "RhythmSlicerApp":
+        return cast(RhythmSlicerApp, self.app)
+
     def compose(self) -> ComposeResult:
         with Horizontal(id="transport_controls"):
             yield Button("Prev", id="transport_prev", classes="transport_button")
@@ -252,14 +258,15 @@ class TransportControls(Static):
 
     def on_button_pressed(self, event: Button.Pressed) -> None:
         control_id = event.button.id
+        app = self._app()
         if control_id == "transport_prev":
-            self.app.action_previous_track()
+            app.action_previous_track()
         elif control_id == "transport_playpause":
-            self.app.action_toggle_playback()
+            app.action_toggle_playback()
         elif control_id == "transport_stop":
-            self.app.action_stop()
+            app.action_stop()
         elif control_id == "transport_next":
-            self.app.action_next_track()
+            app.action_next_track()
         self.refresh_state()
 
     def _refresh_label(self) -> None:
@@ -273,10 +280,11 @@ class TransportControls(Static):
             next_button = self.query_one("#transport_next", Button)
         except Exception:
             return
-        state = (self.app.player.get_state() or "").lower()
+        app = self._app()
+        state = (app.player.get_state() or "").lower()
         label.label = "Pause " if "playing" in state else "Play  "
-        playlist = getattr(self.app, "playlist", None)
-        is_loading = bool(getattr(self.app, "_loading", False))
+        playlist = getattr(app, "playlist", None)
+        is_loading = bool(getattr(app, "_loading", False))
         has_tracks = bool(playlist and not playlist.is_empty())
         is_playing = "playing" in state
         is_paused = "paused" in state
@@ -417,7 +425,7 @@ class StatusController:
 class StatusBar(Static):
     """Status bar widget."""
 
-    def __init__(self, controller: StatusController, **kwargs: object) -> None:
+    def __init__(self, controller: StatusController, **kwargs: Any) -> None:
         super().__init__(**kwargs)
         self._controller = controller
 
@@ -1760,7 +1768,16 @@ class RhythmSlicerApp(App):
         dump_threads("manual dump")
 
     def action_show_help(self) -> None:
-        self.push_screen(HelpModal(self.BINDINGS))
+        self.push_screen(HelpModal(self._help_bindings()))
+
+    def _help_bindings(self) -> list[Binding]:
+        bindings: list[Binding] = []
+        for binding in self.BINDINGS:
+            if isinstance(binding, Binding):
+                bindings.append(binding)
+            else:
+                bindings.append(Binding(*binding))
+        return bindings
 
     def action_playlist_builder(self) -> None:
         start_path = None
@@ -2109,44 +2126,44 @@ class RhythmSlicerApp(App):
 
     def on_mouse_down(self, event: events.MouseDown) -> None:
         if self._status_time_bar and getattr(self._status_time_bar, "region", None):
-            region = self._status_time_bar.region
+            time_region = self._status_time_bar.region
             sx = getattr(event, "screen_x", event.x)
             sy = getattr(event, "screen_y", event.y)
-            if region.contains(sx, sy):
-                ratio = ratio_from_click(int(sx - region.x), region.width)
+            if time_region.contains(sx, sy):
+                ratio = ratio_from_click(int(sx - time_region.x), time_region.width)
                 self._seek_to_ratio(ratio)
                 self._scrub_active = True
                 event.stop()
                 return
         if self._status_volume_bar and getattr(self._status_volume_bar, "region", None):
-            region = self._status_volume_bar.region
+            volume_region = self._status_volume_bar.region
             sx = getattr(event, "screen_x", event.x)
             sy = getattr(event, "screen_y", event.y)
-            if region.contains(sx, sy):
-                ratio = ratio_from_click(int(sx - region.x), region.width)
+            if volume_region.contains(sx, sy):
+                ratio = ratio_from_click(int(sx - volume_region.x), volume_region.width)
                 self._set_volume_from_ratio(ratio)
                 self._volume_scrub_active = True
                 event.stop()
                 return
         if self._status_speed_bar and getattr(self._status_speed_bar, "region", None):
-            region = self._status_speed_bar.region
+            speed_region = self._status_speed_bar.region
             sx = getattr(event, "screen_x", event.x)
             sy = getattr(event, "screen_y", event.y)
-            if region.contains(sx, sy):
-                ratio = ratio_from_click(int(sx - region.x), region.width)
+            if speed_region.contains(sx, sy):
+                ratio = ratio_from_click(int(sx - speed_region.x), speed_region.width)
                 self._set_speed_from_ratio(ratio)
                 self._speed_scrub_active = True
                 event.stop()
                 return
         if self._playlist_table and getattr(self._playlist_table, "region", None):
-            region = self._playlist_table.region
+            table_region = self._playlist_table.region
             sx = getattr(event, "screen_x", event.x)
             sy = getattr(event, "screen_y", event.y)
-            if region.contains(sx, sy):
+            if table_region.contains(sx, sy):
                 return
         if not self._playlist_list:
             return
-        region = getattr(self._playlist_list, "region", None)
+        region: Optional[Region] = getattr(self._playlist_list, "region", None)
         sx = getattr(event, "screen_x", event.x)
         sy = getattr(event, "screen_y", event.y)
         if region and not region.contains(sx, sy):
@@ -2257,12 +2274,12 @@ class RhythmSlicerApp(App):
         if not self._playlist_list:
             return
         if self._playlist_table and getattr(self._playlist_table, "region", None):
-            region = self._playlist_table.region
+            table_region = self._playlist_table.region
             sx = getattr(event, "screen_x", event.x)
             sy = getattr(event, "screen_y", event.y)
-            if region.contains(sx, sy):
+            if table_region.contains(sx, sy):
                 return
-        region = getattr(self._playlist_list, "region", None)
+        region: Optional[Region] = getattr(self._playlist_list, "region", None)
         sx = getattr(event, "screen_x", event.x)
         sy = getattr(event, "screen_y", event.y)
         if region and not region.contains(sx, sy):
@@ -2280,12 +2297,12 @@ class RhythmSlicerApp(App):
         if not self._playlist_list:
             return
         if self._playlist_table and getattr(self._playlist_table, "region", None):
-            region = self._playlist_table.region
+            table_region = self._playlist_table.region
             sx = getattr(event, "screen_x", event.x)
             sy = getattr(event, "screen_y", event.y)
-            if region.contains(sx, sy):
+            if table_region.contains(sx, sy):
                 return
-        region = getattr(self._playlist_list, "region", None)
+        region: Optional[Region] = getattr(self._playlist_list, "region", None)
         sx = getattr(event, "screen_x", event.x)
         sy = getattr(event, "screen_y", event.y)
         if region and not region.contains(sx, sy):
@@ -2752,9 +2769,10 @@ class PlaylistPrompt(ModalScreen[Optional[str]]):
     def on_button_pressed(self, event: Button.Pressed) -> None:
         if event.button.id == "prompt_absolute":
             label = event.button.label
+            label_text = str(label)
             event.button.label = (
                 "Save absolute paths: Off"
-                if "On" in label
+                if "On" in label_text
                 else "Save absolute paths: On"
             )
             return
@@ -2765,7 +2783,7 @@ class PlaylistPrompt(ModalScreen[Optional[str]]):
             if toggle:
                 button = toggle.first()
                 if button and isinstance(button, Button):
-                    absolute = "On" in button.label
+                    absolute = "On" in str(button.label)
             if value:
                 self.dismiss(f"{value}::abs={int(absolute)}")
             else:
@@ -2783,7 +2801,7 @@ class PlaylistPrompt(ModalScreen[Optional[str]]):
             if toggle:
                 button = toggle.first()
                 if button and isinstance(button, Button):
-                    absolute = "On" in button.label
+                    absolute = "On" in str(button.label)
             if value:
                 self.dismiss(f"{value}::abs={int(absolute)}")
             else:
