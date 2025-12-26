@@ -226,7 +226,8 @@ Header {
 }
 
 #status_time_label,
-#status_volume_label {
+#status_volume_label,
+#status_speed_label {
     width: 5;
     content-align: left middle;
     color: $text_dim;
@@ -251,16 +252,31 @@ Header {
 
 #status_volume_bar {
     height: 1;
-    width: 2fr;
-    min-width: 10;
+    width: 1fr;
+    min-width: 6;
     margin: 0 1;
     content-align: left middle;
     text-wrap: nowrap;
 }
 
 #status_volume_text {
-    width: 4;
+    width: 3;
     content-align: right middle;
+}
+
+#status_speed_bar {
+    height: 1;
+    width: 1fr;
+    min-width: 6;
+    margin: 0 1;
+    content-align: left middle;
+    text-wrap: nowrap;
+}
+
+#status_speed_text {
+    width: 6;
+    content-align: right middle;
+    text-wrap: nowrap;
 }
 
 #status_state_text {
