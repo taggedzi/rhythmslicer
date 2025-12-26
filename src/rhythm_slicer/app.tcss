@@ -262,12 +262,14 @@ Header {
 #status_volume_text {
     width: 3;
     content-align: right middle;
+    margin-right: 2;
 }
 
 #status_speed_bar {
     height: 1;
     width: 1fr;
     min-width: 6;
+    max-width: 12;
     margin: 0 1;
     content-align: left middle;
     text-wrap: nowrap;
