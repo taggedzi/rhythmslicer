@@ -36,6 +36,7 @@ class VlcPlayer:
         self._instance = cast(Any, vlc).Instance()
         self._player = self._instance.media_player_new()
         self._current_media: Optional[str] = None
+        self._cached_rate = 1.0
         self._end_reached = threading.Event()
         self._attach_end_reached_event()
 
@@ -93,6 +94,39 @@ class VlcPlayer:
     def set_volume(self, volume: int) -> None:
         """Set volume (0-100)."""
         self._player.audio_set_volume(volume)
+
+    def set_playback_rate(self, rate: float) -> bool:
+        """Set playback rate (best effort)."""
+        try:
+            rate_value = float(rate)
+        except (TypeError, ValueError):
+            return False
+        self._cached_rate = rate_value
+        try:
+            result = self._player.set_rate(rate_value)
+        except Exception:
+            return False
+        if result is None:
+            return True
+        if isinstance(result, (int, float)):
+            return result == 0
+        return False
+
+    def get_playback_rate(self) -> Optional[float]:
+        """Return the current playback rate, if available."""
+        try:
+            rate = self._player.get_rate()
+        except Exception:
+            return None
+        if rate is None:
+            return None
+        try:
+            rate_value = float(rate)
+        except (TypeError, ValueError):
+            return None
+        if rate_value <= 0:
+            return None
+        return rate_value
 
     def get_state(self) -> str:
         """Return a best-effort playback state string."""

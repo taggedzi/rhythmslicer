@@ -452,6 +452,9 @@ class RhythmSlicerApp(App):
         Binding("d", "remove_selected", "Remove Selected"),
         Binding("+", "volume_up", "Volume +5"),
         Binding("-", "volume_down", "Volume -5"),
+        Binding("[", "speed_down", "Speed -0.25x"),
+        Binding("]", "speed_up", "Speed +0.25x"),
+        Binding("\\", "speed_reset", "Speed 1.00x"),
         Binding("r", "cycle_repeat", "Repeat Mode"),
         Binding("h", "toggle_shuffle", "Shuffle"),
         Binding("v", "select_visualization", "Visualization"),
@@ -483,6 +486,7 @@ class RhythmSlicerApp(App):
         config = load_config()
         self._config = config
         self._volume = config.volume
+        self._playback_rate = 1.0
         self._now = now
         self._scroll_offset = 0
         self._last_click_time = 0.0
@@ -527,17 +531,23 @@ class RhythmSlicerApp(App):
         self._status_time_text: Optional[Static] = None
         self._status_volume_bar: Optional[Static] = None
         self._status_volume_text: Optional[Static] = None
+        self._status_speed_bar: Optional[Static] = None
+        self._status_speed_text: Optional[Static] = None
         self._status_state_text: Optional[Static] = None
         self._status_last_time_text: Optional[str] = None
         self._status_last_time_value: Optional[int] = None
         self._status_last_volume_value: Optional[int] = None
         self._status_last_volume_text: Optional[str] = None
+        self._status_last_speed_value: Optional[float] = None
+        self._status_last_speed_text: Optional[str] = None
         self._status_last_message_level: Optional[str] = None
         self._status_last_state_text: Optional[str] = None
         self._ui_tick_count = 0
         self._volume_scrub_active = False
+        self._speed_scrub_active = False
         self._status_last_time_bar_text: Optional[str] = None
         self._status_last_volume_bar_text: Optional[str] = None
+        self._status_last_speed_bar_text: Optional[str] = None
         self._frame_player = FramePlayer(self)
         self._current_track_path: Optional[Path] = None
         self._viewport_width = 1
@@ -616,6 +626,9 @@ class RhythmSlicerApp(App):
                         yield Static("VOL:", id="status_volume_label", markup=False)
                         yield Static("", id="status_volume_bar", markup=False)
                         yield Static("  0", id="status_volume_text", markup=False)
+                        yield Static("SPD:", id="status_speed_label", markup=False)
+                        yield Static("", id="status_speed_bar", markup=False)
+                        yield Static("1.00x", id="status_speed_text", markup=False)
                         yield Static(
                             "[ STOPPED ]", id="status_state_text", markup=False
                         )
@@ -632,6 +645,8 @@ class RhythmSlicerApp(App):
         self._status_time_text = self.query_one("#status_time_text", Static)
         self._status_volume_bar = self.query_one("#status_volume_bar", Static)
         self._status_volume_text = self.query_one("#status_volume_text", Static)
+        self._status_speed_bar = self.query_one("#status_speed_bar", Static)
+        self._status_speed_text = self.query_one("#status_speed_text", Static)
         self._status_state_text = self.query_one("#status_state_text", Static)
         self._init_playlist_table()
         self._update_visualizer_hud()
@@ -815,6 +830,8 @@ class RhythmSlicerApp(App):
             or not self._status_time_text
             or not self._status_volume_bar
             or not self._status_volume_text
+            or not self._status_speed_bar
+            or not self._status_speed_text
             or not self._status_state_text
         ):
             return
@@ -843,6 +860,20 @@ class RhythmSlicerApp(App):
                 self._status_volume_bar.update(bar_text)
                 self._status_last_volume_bar_text = bar_text
             self._status_last_volume_value = volume_value
+
+        speed_value = self._playback_rate
+        speed_text = f"{speed_value:0.2f}x"
+        if force or speed_text != self._status_last_speed_text:
+            self._status_speed_text.update(speed_text)
+            self._status_last_speed_text = speed_text
+        if force or speed_value != self._status_last_speed_value:
+            bar_width = self._bar_widget_width(self._status_speed_bar)
+            ratio = (speed_value - 0.5) / (4.0 - 0.5)
+            bar_text = self._render_status_bar(bar_width, ratio)
+            if force or bar_text != self._status_last_speed_bar_text:
+                self._status_speed_bar.update(bar_text)
+                self._status_last_speed_bar_text = bar_text
+            self._status_last_speed_value = speed_value
 
         message = self._status_controller._current_message()
         message_text = message.text.splitlines()[0] if message else ""
@@ -1425,6 +1456,9 @@ class RhythmSlicerApp(App):
     def _load_and_play_blocking(self, track: Track) -> None:
         self.player.load(str(track.path))
         self.player.play()
+        setter = getattr(self.player, "set_playback_rate", None)
+        if callable(setter):
+            setter(self._playback_rate)
 
     async def _play_track_worker(
         self,
@@ -1614,6 +1648,9 @@ class RhythmSlicerApp(App):
             logger.info("Playback paused")
         elif "paused" in state:
             self.player.play()
+            setter = getattr(self.player, "set_playback_rate", None)
+            if callable(setter):
+                setter(self._playback_rate)
             self._set_message("Playing")
             desired_state = "playing"
             logger.info("Playback resumed")
@@ -1670,6 +1707,15 @@ class RhythmSlicerApp(App):
         self._set_message("Volume down")
         self._save_config()
         self._update_status_panel(force=True)
+
+    def action_speed_down(self) -> None:
+        self._apply_playback_rate(self._playback_rate - 0.25, message="Speed")
+
+    def action_speed_up(self) -> None:
+        self._apply_playback_rate(self._playback_rate + 0.25, message="Speed")
+
+    def action_speed_reset(self) -> None:
+        self._apply_playback_rate(1.0, message="Speed reset")
 
     def action_next_track(self) -> None:
         if not self.playlist or self.playlist.is_empty():
@@ -2082,6 +2128,16 @@ class RhythmSlicerApp(App):
                 self._volume_scrub_active = True
                 event.stop()
                 return
+        if self._status_speed_bar and getattr(self._status_speed_bar, "region", None):
+            region = self._status_speed_bar.region
+            sx = getattr(event, "screen_x", event.x)
+            sy = getattr(event, "screen_y", event.y)
+            if region.contains(sx, sy):
+                ratio = ratio_from_click(int(sx - region.x), region.width)
+                self._set_speed_from_ratio(ratio)
+                self._speed_scrub_active = True
+                event.stop()
+                return
         if self._playlist_table and getattr(self._playlist_table, "region", None):
             region = self._playlist_table.region
             sx = getattr(event, "screen_x", event.x)
@@ -2125,6 +2181,12 @@ class RhythmSlicerApp(App):
                 ratio = ratio_from_click(int(sx - region.x), region.width)
                 self._set_volume_from_ratio(ratio)
                 event.stop()
+        if self._speed_scrub_active and self._status_speed_bar:
+            region = getattr(self._status_speed_bar, "region", None)
+            if region and region.contains(sx, sy):
+                ratio = ratio_from_click(int(sx - region.x), region.width)
+                self._set_speed_from_ratio(ratio)
+                event.stop()
 
     def on_mouse_up(self, event: events.MouseUp) -> None:
         if self._scrub_active:
@@ -2136,6 +2198,10 @@ class RhythmSlicerApp(App):
             self._save_config()
             event.stop()
             return
+        if self._speed_scrub_active:
+            self._speed_scrub_active = False
+            event.stop()
+            return
         del event
 
     def _set_volume_from_ratio(self, ratio: float) -> None:
@@ -2145,6 +2211,32 @@ class RhythmSlicerApp(App):
         self._volume = volume
         self.player.set_volume(self._volume)
         self._update_status_panel(force=True)
+
+    def _set_speed_from_ratio(self, ratio: float) -> None:
+        rate = 0.5 + (max(0.0, min(1.0, ratio)) * (4.0 - 0.5))
+        self._apply_playback_rate(rate, message="Speed")
+
+    def _clamp_snap_rate(self, rate: float) -> float:
+        min_rate = 0.5
+        max_rate = 4.0
+        step = 0.25
+        try:
+            rate_value = float(rate)
+        except (TypeError, ValueError):
+            rate_value = 1.0
+        steps = round((rate_value - min_rate) / step)
+        snapped = min_rate + (steps * step)
+        return round(max(min_rate, min(max_rate, snapped)), 2)
+
+    def _apply_playback_rate(self, rate: float, *, message: str) -> None:
+        snapped = self._clamp_snap_rate(rate)
+        self._playback_rate = snapped
+        setter = getattr(self.player, "set_playback_rate", None)
+        if callable(setter):
+            setter(snapped)
+        self._update_status_panel(force=True)
+        self._set_message(f"{message} {snapped:0.2f}x")
+        self._restart_hackscript_from_player()
 
     def on_resize(self, event: events.Resize) -> None:
         del event
