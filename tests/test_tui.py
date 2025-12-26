@@ -19,6 +19,8 @@ class DummyPlayer:
         self.pause_calls = 0
         self.stop_calls = 0
         self.volume = 100
+        self.playback_rate = 1.0
+        self.rate_calls: list[float] = []
         self.seeks: list[int] = []
         self.loaded: list[str] = []
         self._end_reached = False
@@ -43,6 +45,14 @@ class DummyPlayer:
 
     def set_volume(self, volume: int) -> None:
         self.volume = volume
+
+    def set_playback_rate(self, rate: float) -> bool:
+        self.playback_rate = rate
+        self.rate_calls.append(rate)
+        return True
+
+    def get_playback_rate(self) -> float:
+        return self.playback_rate
 
     def get_position_ms(self) -> int:
         return 1000
@@ -150,6 +160,59 @@ def test_volume_adjustments() -> None:
     assert player.volume == 95
     app.action_volume_up()
     assert player.volume == 100
+
+
+def test_playback_rate_defaults_and_snap() -> None:
+    app = tui.RhythmSlicerApp(player=DummyPlayer(), path="song.mp3")
+    assert app._playback_rate == 1.0
+    assert app._clamp_snap_rate(0.1) == 0.5
+    assert app._clamp_snap_rate(4.8) == 4.0
+    assert app._clamp_snap_rate(1.12) == 1.0
+    assert app._clamp_snap_rate(1.24) == 1.25
+
+
+def test_apply_playback_rate_sets_player_and_message() -> None:
+    player = DummyPlayer()
+    app = tui.RhythmSlicerApp(player=player, path="song.mp3")
+    app._apply_playback_rate(1.37, message="Speed")
+    assert app._playback_rate == 1.25
+    assert player.playback_rate == 1.25
+    assert "Speed 1.25x" in _status_line(app._status_controller)
+
+
+def test_speed_actions_adjust_rate() -> None:
+    player = DummyPlayer()
+    app = tui.RhythmSlicerApp(player=player, path="song.mp3")
+    app.action_speed_up()
+    assert app._playback_rate == 1.25
+    app.action_speed_down()
+    assert app._playback_rate == 1.0
+    app.action_speed_reset()
+    assert app._playback_rate == 1.0
+    assert player.rate_calls[-1] == 1.0
+
+
+def test_set_speed_from_ratio_maps_range(monkeypatch: pytest.MonkeyPatch) -> None:
+    app = tui.RhythmSlicerApp(player=DummyPlayer(), path="song.mp3")
+    applied: list[float] = []
+
+    def fake_apply(rate: float, *, message: str) -> None:
+        applied.append(rate)
+
+    monkeypatch.setattr(app, "_apply_playback_rate", fake_apply)
+    app._set_speed_from_ratio(0.0)
+    app._set_speed_from_ratio(0.5)
+    app._set_speed_from_ratio(1.0)
+    assert applied == [0.5, 2.25, 4.0]
+
+
+def test_load_and_play_blocking_applies_rate() -> None:
+    player = DummyPlayer()
+    app = tui.RhythmSlicerApp(player=player, path="song.mp3")
+    app._playback_rate = 1.5
+    track = Track(path=Path("song.mp3"), title="song.mp3")
+    app._load_and_play_blocking(track)
+    assert player.rate_calls[-1] == 1.5
 
 
 def test_ratio_from_click() -> None:
