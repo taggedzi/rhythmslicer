@@ -8,7 +8,24 @@ from typing import Iterable, Optional
 
 from rhythm_slicer.metadata import format_display_title, get_track_meta
 
-SUPPORTED_EXTENSIONS = {".mp3", ".flac", ".wav", ".ogg", ".m4a", ".aac"}
+SUPPORTED_EXTENSIONS = {
+    ".mp3",
+    ".flac",
+    ".wav",
+    ".ogg",
+    ".m4a",
+    ".aac",
+    ".opus",
+    ".aiff",
+    ".aif",
+    ".wv",
+    ".ape",
+    ".mp2",
+    ".spx",
+    ".m4b",
+    ".wma",
+    ".amr",
+}
 M3U_EXTENSIONS = {".m3u", ".m3u8"}
 
 
