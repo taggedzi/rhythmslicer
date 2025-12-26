@@ -12,13 +12,17 @@
 ![Domain](https://img.shields.io/badge/domain-audio%20%26%20music-blue)
 ![Playlist](https://img.shields.io/badge/feature-playlist%20builder-informational)
 
+RhythmSlicer Pro is a console-based music player.
 
+It lets you browse playlists and play audio directly from the terminal, using VLC under the hood for playback. The focus is on simplicity, keyboard-driven control, and a clean terminal experience.
 
-RhythmSlicer Pro is a cross-platform CLI + Textual TUI music player with
-playlist management and built-in ASCII visualizers powered by the VLC backend.
+RhythmSlicer Pro does not attempt to manage media libraries or reinvent audio playback — it simply provides a usable interface for playing music in the console.
+
+Note: Playback is handled by VLC, so support for specific audio formats depends on the installed VLC build and operating system. RhythmSlicer Pro aims to stay lightweight by delegating decoding and playback entirely to VLC.
+
+## Screenshots
 
 ![RhythmSlicer TUI](docs/screenshots/ui.png)
-
 ![RhythmSlicer TUI Playlist Builder](docs/screenshots/playlist_builder.png)
 
 ## Requirements
