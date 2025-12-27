@@ -12,7 +12,6 @@ from pathlib import Path
 import time
 from typing import Any, Callable, Iterator, Optional, cast
 import logging
-from typing_extensions import TypeAlias
 
 try:
     from textual.app import App, ComposeResult
@@ -37,6 +36,7 @@ from rhythm_slicer.logging_setup import set_console_level
 from rhythm_slicer.ui.help_modal import HelpModal
 from rhythm_slicer.ui.playlist_builder import PlaylistBuilderScreen
 from rhythm_slicer.ui.textual_compat import Panel
+from rhythm_slicer.ui.tui_types import TrackSignature
 from rhythm_slicer.visualizations.ansi import sanitize_ansi_sgr
 from rhythm_slicer.metadata import (
     TrackMeta,
@@ -53,15 +53,6 @@ from rhythm_slicer.playlist import (
 )
 
 logger = logging.getLogger(__name__)
-
-TrackSignature: TypeAlias = tuple[
-    Optional[str],
-    str,
-    str,
-    str,
-    int,
-    int,
-]
 
 
 def visualizer_bars(seed_ms: int, width: int, height: int) -> list[int]:
