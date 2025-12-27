@@ -24,26 +24,7 @@ try:
     from textual.widgets import Button, DataTable, Header, Input, Static
     from textual.widgets.data_table import RowDoesNotExist
     from textual.timer import Timer
-    from textual.widget import Widget
     from rich.text import Text
-    import textual.widgets as textual_widgets
-
-    TextualPanel = getattr(textual_widgets, "Panel", None)
-
-    class PanelFallback(Container):
-        def __init__(
-            self,
-            *children: Widget,
-            title: str | None = None,
-            id: str | None = None,
-            classes: str | None = None,
-            disabled: bool = False,
-        ) -> None:
-            super().__init__(*children, id=id, classes=classes, disabled=disabled)
-            if title:
-                self.border_title = title
-
-    Panel = TextualPanel or PanelFallback
 except Exception as exc:  # pragma: no cover - depends on environment
     raise RuntimeError(
         "Textual is required for the TUI. Install the 'textual' dependency."
@@ -55,6 +36,7 @@ from rhythm_slicer.hangwatch import HangWatchdog, dump_threads
 from rhythm_slicer.logging_setup import set_console_level
 from rhythm_slicer.ui.help_modal import HelpModal
 from rhythm_slicer.ui.playlist_builder import PlaylistBuilderScreen
+from rhythm_slicer.ui.textual_compat import Panel
 from rhythm_slicer.visualizations.ansi import sanitize_ansi_sgr
 from rhythm_slicer.metadata import (
     TrackMeta,
