@@ -91,3 +91,24 @@ def render_visualizer_view(
         bars = bars_fn(seed_ms, width, height)
         return render_bars_fn(bars, height)
     return render_mode_fn(mode, width, height)
+
+
+def render_visualizer_mode(
+    mode: str,
+    width: int,
+    height: int,
+    *,
+    now: Callable[[], float],
+    loading_step: float,
+    tiny_text_fn: Callable[[int, int], str],
+    center_message_fn: Callable[[str, int, int], str],
+) -> str:
+    if width <= 0 or height <= 0:
+        return ""
+    if width <= 2 or height <= 1:
+        return tiny_text_fn(width, height)
+    message = mode
+    if mode == "LOADING":
+        phase = int(now() / loading_step) % 4
+        message = f"LOADING{'.' * phase}"
+    return center_message_fn(message, width, height)
