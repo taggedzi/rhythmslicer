@@ -36,6 +36,7 @@ from rhythm_slicer.ui.help_modal import HelpModal
 from rhythm_slicer.ui.playlist_builder import PlaylistBuilderScreen
 from rhythm_slicer.ui.textual_compat import Panel
 from rhythm_slicer.ui.tui_formatters import (
+    _display_state,
     _format_time_ms,
     render_visualizer,
     visualizer_bars,
@@ -57,10 +58,6 @@ from rhythm_slicer.playlist import (
 )
 
 logger = logging.getLogger(__name__)
-
-
-def _display_state(state: str) -> str:
-    return state.capitalize() if state else "Unknown"
 
 
 def ratio_from_click(x: int, width: int) -> float:

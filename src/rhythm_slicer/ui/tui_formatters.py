@@ -42,3 +42,7 @@ def _format_time_ms(value: Optional[int]) -> Optional[str]:
     if hours:
         return f"{hours:02d}:{minutes:02d}:{seconds:02d}"
     return f"{minutes:02d}:{seconds:02d}"
+
+
+def _display_state(state: str) -> str:
+    return state.capitalize() if state else "Unknown"
