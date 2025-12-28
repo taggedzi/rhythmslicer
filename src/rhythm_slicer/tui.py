@@ -55,6 +55,7 @@ from rhythm_slicer.ui.text_helpers import _truncate_line
 from rhythm_slicer.ui.visualizer_rendering import (
     center_visualizer_message,
     clip_frame_text,
+    render_ansi_frame,
     tiny_visualizer_text,
     visualizer_hud_size,
 )
@@ -598,21 +599,7 @@ class RhythmSlicerApp(App):
         return _truncate_line(text, self._playlist_width())
 
     def _render_ansi_frame(self, text: str, width: int, height: int) -> Text:
-        lines = text.splitlines()
-        if not lines:
-            lines = [""]
-        rendered = Text()
-        for idx in range(height):
-            if idx > 0:
-                rendered.append("\n")
-            line = lines[idx] if idx < len(lines) else ""
-            line_text = Text.from_ansi(line)
-            if line_text.cell_len > width:
-                line_text.truncate(width)
-            if line_text.cell_len < width:
-                line_text.append(" " * (width - line_text.cell_len))
-            rendered.append_text(line_text)
-        return rendered
+        return render_ansi_frame(text, width, height)
 
     def _update_status_panel(self, *, force: bool = False) -> None:
         if (
