@@ -39,6 +39,9 @@ from rhythm_slicer.ui.textual_compat import Panel
 from rhythm_slicer.ui.tui_formatters import (
     ellipsize,
     _format_time_ms,
+    _format_open_prompt_result,
+    _parse_open_prompt_result,
+    _parse_prompt_result,
     _truncate_line,
     ratio_from_click,
     target_ms_from_ratio,
@@ -2562,24 +2565,6 @@ class OpenPrompt(ModalScreen[Optional[str]]):
         if event.key == "enter":
             if isinstance(self.app.focused, Input):
                 self._confirm()
-
-
-def _parse_prompt_result(value: str) -> tuple[str, bool]:
-    if "::abs=" not in value:
-        return value, False
-    path, raw = value.rsplit("::abs=", 1)
-    return path, raw.strip() == "1"
-
-
-def _format_open_prompt_result(path: str, recursive: bool) -> str:
-    return f"{path}::recursive={int(recursive)}"
-
-
-def _parse_open_prompt_result(value: str) -> tuple[str, bool]:
-    if "::recursive=" not in value:
-        return value, False
-    path, raw = value.rsplit("::recursive=", 1)
-    return path, raw.strip() == "1"
 
 
 def _load_recursive_directory(path: Path) -> Playlist:
