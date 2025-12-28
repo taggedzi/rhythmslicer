@@ -56,6 +56,7 @@ from rhythm_slicer.ui.visualizer_rendering import (
     center_visualizer_message,
     clip_frame_text,
     render_ansi_frame,
+    render_visualizer_hud,
     render_visualizer_mode,
     render_visualizer_view,
     tiny_visualizer_text,
@@ -523,53 +524,15 @@ class RhythmSlicerApp(App):
 
     def _render_visualizer_hud(self) -> Text:
         width, height = self._visualizer_hud_size()
-        if width <= 0 or height <= 0:
-            return Text("")
-        track = None
-        if self.playlist and self._playing_index is not None:
-            if 0 <= self._playing_index < len(self.playlist.tracks):
-                track = self.playlist.tracks[self._playing_index]
-        meta = self._get_track_meta_cached(track.path) if track else None
-        if track and meta is None:
-            self._ensure_track_meta_loaded(track.path)
-        title = meta.title if meta and meta.title else (track.title if track else "—")
-        if not title and track:
-            title = track.path.name
-        artist = meta.artist if meta and meta.artist else "Unknown"
-        album = meta.album if meta and meta.album else "Unknown"
-
-        label_style = "dim"
-        value_style = "#c6d0f2"
-        title_style = "bold #5fc9d6"
-
-        def column_text(
-            label: str, value: str, col_width: int, *, is_title: bool = False
-        ) -> Text:
-            label_text = f"{label}: "
-            value_width = max(1, col_width - len(label_text))
-            value_text = ellipsize(value, value_width)
-            text = Text(label_text, style=label_style)
-            style = title_style if is_title else value_style
-            text.append(value_text, style=style)
-            if text.cell_len < col_width:
-                text.append(" " * (col_width - text.cell_len))
-            return text
-
-        lines: list[Text] = []
-        lines.append(column_text("TITLE", title, width, is_title=True))
-        lines.append(column_text("ARTIST", artist, width))
-        lines.append(column_text("ALBUM", album, width))
-
-        if len(lines) < height:
-            lines.extend([Text(" " * width)] * (height - len(lines)))
-        if len(lines) > height:
-            lines = lines[:height]
-        output = Text()
-        for idx, line in enumerate(lines):
-            if idx:
-                output.append("\n")
-            output.append_text(line)
-        return output
+        return render_visualizer_hud(
+            width=width,
+            height=height,
+            playlist=self.playlist,
+            playing_index=self._playing_index,
+            get_meta_cached=self._get_track_meta_cached,
+            ensure_meta_loaded=self._ensure_track_meta_loaded,
+            ellipsize_fn=ellipsize,
+        )
 
     def _render_playlist_line_text(
         self,

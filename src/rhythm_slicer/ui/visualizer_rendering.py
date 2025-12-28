@@ -3,9 +3,12 @@
 from __future__ import annotations
 
 from typing import Any, Callable
+from pathlib import Path
 
 from rich.text import Text
 
+from rhythm_slicer.metadata import TrackMeta
+from rhythm_slicer.playlist import Playlist, Track
 from rhythm_slicer.ui.text_helpers import _truncate_line
 
 
@@ -112,3 +115,62 @@ def render_visualizer_mode(
         phase = int(now() / loading_step) % 4
         message = f"LOADING{'.' * phase}"
     return center_message_fn(message, width, height)
+
+
+def render_visualizer_hud(
+    *,
+    width: int,
+    height: int,
+    playlist: Playlist | None,
+    playing_index: int | None,
+    get_meta_cached: Callable[[Path], TrackMeta | None],
+    ensure_meta_loaded: Callable[[Path], None],
+    ellipsize_fn: Callable[[str, int], str],
+) -> Text:
+    if width <= 0 or height <= 0:
+        return Text("")
+    track: Track | None = None
+    if playlist and playing_index is not None:
+        if 0 <= playing_index < len(playlist.tracks):
+            track = playlist.tracks[playing_index]
+    meta = get_meta_cached(track.path) if track else None
+    if track and meta is None:
+        ensure_meta_loaded(track.path)
+    title = meta.title if meta and meta.title else (track.title if track else "—")
+    if not title and track:
+        title = track.path.name
+    artist = meta.artist if meta and meta.artist else "Unknown"
+    album = meta.album if meta and meta.album else "Unknown"
+
+    label_style = "dim"
+    value_style = "#c6d0f2"
+    title_style = "bold #5fc9d6"
+
+    def column_text(
+        label: str, value: str, col_width: int, *, is_title: bool = False
+    ) -> Text:
+        label_text = f"{label}: "
+        value_width = max(1, col_width - len(label_text))
+        value_text = ellipsize_fn(value, value_width)
+        text = Text(label_text, style=label_style)
+        style = title_style if is_title else value_style
+        text.append(value_text, style=style)
+        if text.cell_len < col_width:
+            text.append(" " * (col_width - text.cell_len))
+        return text
+
+    lines: list[Text] = []
+    lines.append(column_text("TITLE", title, width, is_title=True))
+    lines.append(column_text("ARTIST", artist, width))
+    lines.append(column_text("ALBUM", album, width))
+
+    if len(lines) < height:
+        lines.extend([Text(" " * width)] * (height - len(lines)))
+    if len(lines) > height:
+        lines = lines[:height]
+    output = Text()
+    for idx, line in enumerate(lines):
+        if idx:
+            output.append("\n")
+        output.append_text(line)
+    return output
