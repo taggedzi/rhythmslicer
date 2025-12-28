@@ -21,7 +21,6 @@ try:
     from textual.screen import ModalScreen
     from textual.widgets import Button, DataTable, Header, Input, Static
     from textual.widgets.data_table import RowDoesNotExist
-    from textual.timer import Timer
     from rich.text import Text
 except Exception as exc:  # pragma: no cover - depends on environment
     raise RuntimeError(
@@ -32,10 +31,12 @@ from rhythm_slicer.config import AppConfig, load_config, save_config
 from rhythm_slicer.hackscript import HackFrame, generate as generate_hackscript
 from rhythm_slicer.hangwatch import HangWatchdog, dump_threads
 from rhythm_slicer.logging_setup import set_console_level
+from rhythm_slicer.ui.frame_player import FramePlayer
 from rhythm_slicer.ui.help_modal import HelpModal
 from rhythm_slicer.ui.playlist_builder import PlaylistBuilderScreen
 from rhythm_slicer.ui.textual_compat import Panel
 from rhythm_slicer.ui.tui_formatters import (
+    _display_state,
     _format_time_ms,
     ratio_from_click,
     target_ms_from_ratio,
@@ -43,6 +44,7 @@ from rhythm_slicer.ui.tui_formatters import (
     visualizer_bars,
 )
 from rhythm_slicer.ui.tui_types import TrackSignature
+from rhythm_slicer.ui.tui_widgets import PlaylistTable, VisualizerHud
 from rhythm_slicer.visualizations.ansi import sanitize_ansi_sgr
 from rhythm_slicer.metadata import (
     TrackMeta,
@@ -78,87 +80,6 @@ def build_play_order(
     except ValueError:
         position = 0
     return order, position
-
-
-class FramePlayer:
-    """Non-blocking HackScript frame player for the visualizer."""
-
-    def __init__(self, app: "RhythmSlicerApp") -> None:
-        self._app = app
-        self._frames: Optional[Iterator[HackFrame]] = None
-        self._timer: Optional[Timer] = None
-
-    def start(
-        self,
-        frames: Iterator[HackFrame],
-        *,
-        first_frame: HackFrame | None = None,
-    ) -> None:
-        self.stop()
-        self._frames = frames
-        if first_frame is not None:
-            self._app._show_frame(first_frame)
-            self._schedule_next(first_frame.hold_ms)
-        else:
-            self._advance()
-
-    def stop(self) -> None:
-        if self._timer is not None:
-            self._timer.stop()
-            self._timer = None
-        self._frames = None
-
-    @property
-    def is_running(self) -> bool:
-        return self._frames is not None
-
-    def _advance(self) -> None:
-        if self._frames is None:
-            return
-        try:
-            frame = next(self._frames)
-        except Exception as exc:
-            logger.exception("Visualizer frame error")
-            self._app._set_message(f"Visualizer error: {exc}", level="error")
-            self.stop()
-            return
-        except StopIteration:
-            self.stop()
-            return
-        self._app._show_frame(frame)
-        self._schedule_next(frame.hold_ms)
-
-    def _schedule_next(self, hold_ms: int) -> None:
-        try:
-            asyncio.get_running_loop()
-        except RuntimeError:
-            self.stop()
-            return
-        delay = max(0.01, hold_ms / 1000.0)
-        self._timer = self._app.set_timer(delay, self._advance)
-
-
-class VisualizerHud(Static):
-    """Compact HUD for the visualizer pane."""
-
-
-class PlaylistTable(DataTable):
-    """Playlist table with double-click play behavior."""
-
-    async def _on_click(self, event: events.Click) -> None:
-        if hasattr(self.app, "_set_user_navigation_lockout"):
-            self.app._set_user_navigation_lockout()
-        await super()._on_click(event)
-
-    def _on_mouse_scroll_down(self, event: events.MouseScrollDown) -> None:
-        if hasattr(self.app, "_set_user_navigation_lockout"):
-            self.app._set_user_navigation_lockout()
-        super()._on_mouse_scroll_down(event)
-
-    def _on_mouse_scroll_up(self, event: events.MouseScrollUp) -> None:
-        if hasattr(self.app, "_set_user_navigation_lockout"):
-            self.app._set_user_navigation_lockout()
-        super()._on_mouse_scroll_up(event)
 
 
 class TransportControls(Static):
