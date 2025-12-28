@@ -46,3 +46,11 @@ def _format_time_ms(value: Optional[int]) -> Optional[str]:
 
 def _display_state(state: str) -> str:
     return state.capitalize() if state else "Unknown"
+
+
+def ratio_from_click(x: int, width: int) -> float:
+    """Map a click x position to a 0..1 ratio."""
+    if width <= 1:
+        return 0.0
+    clamped = max(0, min(x, width - 1))
+    return clamped / float(width - 1)

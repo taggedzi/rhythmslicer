@@ -37,6 +37,7 @@ from rhythm_slicer.ui.playlist_builder import PlaylistBuilderScreen
 from rhythm_slicer.ui.textual_compat import Panel
 from rhythm_slicer.ui.tui_formatters import (
     _format_time_ms,
+    ratio_from_click,
     render_visualizer,
     visualizer_bars,
 )
@@ -57,14 +58,6 @@ from rhythm_slicer.playlist import (
 )
 
 logger = logging.getLogger(__name__)
-
-
-def ratio_from_click(x: int, width: int) -> float:
-    """Map a click x position to a 0..1 ratio."""
-    if width <= 1:
-        return 0.0
-    clamped = max(0, min(x, width - 1))
-    return clamped / float(width - 1)
 
 
 def target_ms_from_ratio(length_ms: int, ratio: float) -> int:
