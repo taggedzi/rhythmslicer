@@ -58,6 +58,16 @@ def _truncate_line(text: str, max_width: int) -> str:
     return text[: max_width - 1] + "…"
 
 
+def ellipsize(text: str, max_len: int) -> str:
+    if max_len <= 0:
+        return ""
+    if len(text) <= max_len:
+        return text
+    if max_len <= 3:
+        return "." * max_len
+    return text[: max_len - 3] + "..."
+
+
 def ratio_from_click(x: int, width: int) -> float:
     """Map a click x position to a 0..1 ratio."""
     if width <= 1:
