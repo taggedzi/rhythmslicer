@@ -54,3 +54,8 @@ def ratio_from_click(x: int, width: int) -> float:
         return 0.0
     clamped = max(0, min(x, width - 1))
     return clamped / float(width - 1)
+
+
+def target_ms_from_ratio(length_ms: int, ratio: float) -> int:
+    """Return a target time in ms for a ratio of track length."""
+    return int(max(0.0, min(1.0, ratio)) * max(0, length_ms))

@@ -38,6 +38,7 @@ from rhythm_slicer.ui.textual_compat import Panel
 from rhythm_slicer.ui.tui_formatters import (
     _format_time_ms,
     ratio_from_click,
+    target_ms_from_ratio,
     render_visualizer,
     visualizer_bars,
 )
@@ -58,11 +59,6 @@ from rhythm_slicer.playlist import (
 )
 
 logger = logging.getLogger(__name__)
-
-
-def target_ms_from_ratio(length_ms: int, ratio: float) -> int:
-    """Return a target time in ms for a ratio of track length."""
-    return int(max(0.0, min(1.0, ratio)) * max(0, length_ms))
 
 
 def build_play_order(
