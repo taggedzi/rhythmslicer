@@ -32,6 +32,7 @@ from rhythm_slicer.hangwatch import HangWatchdog, dump_threads
 from rhythm_slicer.logging_setup import set_console_level
 from rhythm_slicer.ui.frame_player import FramePlayer
 from rhythm_slicer.ui.help_modal import HelpModal
+from rhythm_slicer.ui.bindings import normalize_bindings
 from rhythm_slicer.ui.play_order import build_play_order
 from rhythm_slicer.ui.playlist_io import _load_recursive_directory
 from rhythm_slicer.ui.playlist_builder import PlaylistBuilderScreen
@@ -1560,13 +1561,7 @@ class RhythmSlicerApp(App):
         self.run_worker(self._open_flow(), exclusive=True)
 
     def _help_bindings(self) -> list[Binding]:
-        bindings: list[Binding] = []
-        for binding in self.BINDINGS:
-            if isinstance(binding, Binding):
-                bindings.append(binding)
-            else:
-                bindings.append(Binding(*binding))
-        return bindings
+        return normalize_bindings(self.BINDINGS)
 
     # --- Event handlers ---
     async def on_mount(self) -> None:
