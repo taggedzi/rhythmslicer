@@ -432,7 +432,7 @@ class RhythmSlicerApp(App):
         size = getattr(widget, "content_size", None) or widget.size
         return max(1, getattr(size, "width", 1))
 
-    # --- Status / HUD ---
+    # --- Rendering helpers ---
     def _render_status_bar(self, width: int, ratio: float) -> str:
         if width <= 1:
             return "█"[:width]
