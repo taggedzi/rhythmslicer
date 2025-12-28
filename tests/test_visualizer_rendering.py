@@ -1,6 +1,7 @@
 from rhythm_slicer.ui.visualizer_rendering import (
     center_visualizer_message,
     clip_frame_text,
+    render_visualizer_view,
     tiny_visualizer_text,
     visualizer_hud_size,
 )
@@ -93,3 +94,139 @@ def test_visualizer_hud_size_missing_dimensions_default() -> None:
 def test_visualizer_hud_size_clamped_to_one() -> None:
     hud = _Hud(size=_Size(width=0, height=-2))
     assert visualizer_hud_size(hud) == (1, 1)
+
+
+def test_render_visualizer_view_invalid_size_short_circuits() -> None:
+    calls = {"bars": 0, "render_bars": 0, "render_mode": 0, "tiny": 0}
+
+    def bars_fn(seed_ms, width, height):
+        calls["bars"] += 1
+        return "bars"
+
+    def render_bars_fn(bars, height):
+        calls["render_bars"] += 1
+        return "rendered"
+
+    def render_mode_fn(mode, width, height):
+        calls["render_mode"] += 1
+        return "mode"
+
+    def tiny_text_fn(width, height):
+        calls["tiny"] += 1
+        return "tiny"
+
+    assert (
+        render_visualizer_view(
+            width=0,
+            height=5,
+            mode="PLAYING",
+            frame_player_is_running=False,
+            seed_ms=123,
+            bars_fn=bars_fn,
+            render_bars_fn=render_bars_fn,
+            render_mode_fn=render_mode_fn,
+            tiny_text_fn=tiny_text_fn,
+        )
+        == ""
+    )
+    assert (
+        render_visualizer_view(
+            width=5,
+            height=0,
+            mode="PLAYING",
+            frame_player_is_running=False,
+            seed_ms=123,
+            bars_fn=bars_fn,
+            render_bars_fn=render_bars_fn,
+            render_mode_fn=render_mode_fn,
+            tiny_text_fn=tiny_text_fn,
+        )
+        == ""
+    )
+    assert calls == {"bars": 0, "render_bars": 0, "render_mode": 0, "tiny": 0}
+
+
+def test_render_visualizer_view_tiny_mode_only() -> None:
+    calls = {"bars": 0, "render_bars": 0, "render_mode": 0, "tiny": 0}
+
+    def bars_fn(seed_ms, width, height):
+        calls["bars"] += 1
+        return "bars"
+
+    def render_bars_fn(bars, height):
+        calls["render_bars"] += 1
+        return "rendered"
+
+    def render_mode_fn(mode, width, height):
+        calls["render_mode"] += 1
+        return "mode"
+
+    def tiny_text_fn(width, height):
+        calls["tiny"] += 1
+        return f"tiny:{width}x{height}"
+
+    assert (
+        render_visualizer_view(
+            width=2,
+            height=10,
+            mode="PAUSED",
+            frame_player_is_running=True,
+            seed_ms=123,
+            bars_fn=bars_fn,
+            render_bars_fn=render_bars_fn,
+            render_mode_fn=render_mode_fn,
+            tiny_text_fn=tiny_text_fn,
+        )
+        == "tiny:2x10"
+    )
+    assert (
+        render_visualizer_view(
+            width=10,
+            height=1,
+            mode="STOPPED",
+            frame_player_is_running=True,
+            seed_ms=123,
+            bars_fn=bars_fn,
+            render_bars_fn=render_bars_fn,
+            render_mode_fn=render_mode_fn,
+            tiny_text_fn=tiny_text_fn,
+        )
+        == "tiny:10x1"
+    )
+    assert calls == {"bars": 0, "render_bars": 0, "render_mode": 0, "tiny": 2}
+
+
+def test_render_visualizer_view_playing_fallback() -> None:
+    calls = {"bars": 0, "render_bars": 0, "render_mode": 0}
+    seen = {}
+
+    def bars_fn(seed_ms, width, height):
+        calls["bars"] += 1
+        seen["bars_args"] = (seed_ms, width, height)
+        return "bars"
+
+    def render_bars_fn(bars, height):
+        calls["render_bars"] += 1
+        seen["render_bars_args"] = (bars, height)
+        return "rendered"
+
+    def render_mode_fn(mode, width, height):
+        calls["render_mode"] += 1
+        return "mode"
+
+    result = render_visualizer_view(
+        width=5,
+        height=3,
+        mode="PLAYING",
+        frame_player_is_running=False,
+        seed_ms=999,
+        bars_fn=bars_fn,
+        render_bars_fn=render_bars_fn,
+        render_mode_fn=render_mode_fn,
+        tiny_text_fn=lambda width, height: "tiny",
+    )
+
+    assert result == "rendered"
+    assert calls == {"bars": 1, "render_bars": 1, "render_mode": 0}
+    assert seen["bars_args"] == (999, 5, 3)
+    assert seen["render_bars_args"] == ("bars", 3)
