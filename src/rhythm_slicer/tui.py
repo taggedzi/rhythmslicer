@@ -35,7 +35,11 @@ from rhythm_slicer.logging_setup import set_console_level
 from rhythm_slicer.ui.help_modal import HelpModal
 from rhythm_slicer.ui.playlist_builder import PlaylistBuilderScreen
 from rhythm_slicer.ui.textual_compat import Panel
-from rhythm_slicer.ui.tui_formatters import visualizer_bars
+from rhythm_slicer.ui.tui_formatters import (
+    _format_time_ms,
+    render_visualizer,
+    visualizer_bars,
+)
 from rhythm_slicer.ui.tui_types import TrackSignature
 from rhythm_slicer.visualizations.ansi import sanitize_ansi_sgr
 from rhythm_slicer.metadata import (
@@ -53,30 +57,6 @@ from rhythm_slicer.playlist import (
 )
 
 logger = logging.getLogger(__name__)
-
-
-def render_visualizer(bars: list[int], height: int) -> str:
-    """Render bar heights into a multi-line ASCII visualizer."""
-    if height <= 0 or not bars:
-        return ""
-    width = len(bars)
-    lines: list[str] = []
-    for row in range(height):
-        threshold = height - row
-        line = "".join("#" if bars[col] >= threshold else " " for col in range(width))
-        lines.append(line)
-    return "\n".join(lines)
-
-
-def _format_time_ms(value: Optional[int]) -> Optional[str]:
-    if value is None:
-        return None
-    total_seconds = max(0, value // 1000)
-    minutes, seconds = divmod(total_seconds, 60)
-    hours, minutes = divmod(minutes, 60)
-    if hours:
-        return f"{hours:02d}:{minutes:02d}:{seconds:02d}"
-    return f"{minutes:02d}:{seconds:02d}"
 
 
 def _display_state(state: str) -> str:
