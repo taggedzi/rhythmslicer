@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from typing import Any, Callable
+
 from rich.text import Text
 
 from rhythm_slicer.ui.text_helpers import _truncate_line
@@ -67,3 +69,25 @@ def render_ansi_frame(text: str, width: int, height: int) -> Text:
             line_text.append(" " * (width - line_text.cell_len))
         rendered.append_text(line_text)
     return rendered
+
+
+def render_visualizer_view(
+    *,
+    width: int,
+    height: int,
+    mode: str,
+    frame_player_is_running: bool,
+    seed_ms: int,
+    bars_fn: Callable[[int, int, int], Any],
+    render_bars_fn: Callable[[Any, int], str],
+    render_mode_fn: Callable[[str, int, int], str],
+    tiny_text_fn: Callable[[int, int], str],
+) -> str:
+    if width <= 0 or height <= 0:
+        return ""
+    if width <= 2 or height <= 1:
+        return tiny_text_fn(width, height)
+    if mode == "PLAYING" and not frame_player_is_running:
+        bars = bars_fn(seed_ms, width, height)
+        return render_bars_fn(bars, height)
+    return render_mode_fn(mode, width, height)
