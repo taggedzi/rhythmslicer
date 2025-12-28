@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass
 import importlib
 import pkgutil
 import asyncio
@@ -43,7 +42,7 @@ from rhythm_slicer.ui.tui_formatters import (
     render_visualizer,
     visualizer_bars,
 )
-from rhythm_slicer.ui.tui_types import TrackSignature
+from rhythm_slicer.ui.tui_types import StatusMessage, TrackSignature
 from rhythm_slicer.ui.tui_widgets import (
     PlaylistTable,
     TransportControls,
@@ -65,13 +64,6 @@ from rhythm_slicer.playlist import (
 )
 
 logger = logging.getLogger(__name__)
-
-
-@dataclass
-class StatusMessage:
-    text: str
-    level: str
-    until: Optional[float]
 
 
 class StatusController:
