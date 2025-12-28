@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from rich.text import Text
+
 from rhythm_slicer.ui.text_helpers import _truncate_line
 
 
@@ -47,3 +49,21 @@ def visualizer_hud_size(visualizer_hud: object | None) -> tuple[int, int]:
     width = max(1, getattr(size, "width", 1))
     height = max(1, getattr(size, "height", 1))
     return (width, height)
+
+
+def render_ansi_frame(text: str, width: int, height: int) -> Text:
+    lines = text.splitlines()
+    if not lines:
+        lines = [""]
+    rendered = Text()
+    for idx in range(height):
+        if idx > 0:
+            rendered.append("\n")
+        line = lines[idx] if idx < len(lines) else ""
+        line_text = Text.from_ansi(line)
+        if line_text.cell_len > width:
+            line_text.truncate(width)
+        if line_text.cell_len < width:
+            line_text.append(" " * (width - line_text.cell_len))
+        rendered.append_text(line_text)
+    return rendered
