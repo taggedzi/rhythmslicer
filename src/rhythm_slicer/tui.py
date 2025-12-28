@@ -56,6 +56,7 @@ from rhythm_slicer.ui.visualizer_rendering import (
     center_visualizer_message,
     clip_frame_text,
     render_ansi_frame,
+    render_visualizer_view,
     tiny_visualizer_text,
     visualizer_hud_size,
 )
@@ -480,16 +481,33 @@ class RhythmSlicerApp(App):
     # --- Visualizer ---
     def _render_visualizer(self) -> str:
         width, height = self._visualizer_viewport()
-        if width <= 0 or height <= 0:
-            return ""
-        if width <= 2 or height <= 1:
-            return self._tiny_visualizer_text(width, height)
+        if width <= 0 or height <= 0 or width <= 2 or height <= 1:
+            return render_visualizer_view(
+                width=width,
+                height=height,
+                mode="",
+                frame_player_is_running=self._frame_player.is_running,
+                seed_ms=0,
+                bars_fn=visualizer_bars,
+                render_bars_fn=render_visualizer,
+                render_mode_fn=self._render_visualizer_mode,
+                tiny_text_fn=self._tiny_visualizer_text,
+            )
         mode = self._visualizer_mode()
+        seed_ms = 0
         if mode == "PLAYING" and not self._frame_player.is_running:
             seed_ms = self._get_playback_position_ms() or int(self._now() * 1000)
-            bars = visualizer_bars(seed_ms, width, height)
-            return render_visualizer(bars, height)
-        return self._render_visualizer_mode(mode, width, height)
+        return render_visualizer_view(
+            width=width,
+            height=height,
+            mode=mode,
+            frame_player_is_running=self._frame_player.is_running,
+            seed_ms=seed_ms,
+            bars_fn=visualizer_bars,
+            render_bars_fn=render_visualizer,
+            render_mode_fn=self._render_visualizer_mode,
+            tiny_text_fn=self._tiny_visualizer_text,
+        )
 
     def _render_visualizer_mode(self, mode: str, width: int, height: int) -> str:
         if width <= 0 or height <= 0:
