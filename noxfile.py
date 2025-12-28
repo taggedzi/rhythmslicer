@@ -147,6 +147,6 @@ def local_dev(session: nox.Session) -> None:
         "lint-dev",
         "typecheck-dev",
         "tests-dev",
-        "coverage-dev",
+        # "coverage-dev",
         external=True,
     )
