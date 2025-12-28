@@ -37,6 +37,7 @@ from rhythm_slicer.ui.playlist_builder import PlaylistBuilderScreen
 from rhythm_slicer.ui.textual_compat import Panel
 from rhythm_slicer.ui.tui_formatters import (
     _format_time_ms,
+    _truncate_line,
     ratio_from_click,
     target_ms_from_ratio,
     render_visualizer,
@@ -2678,16 +2679,6 @@ class OpenPrompt(ModalScreen[Optional[str]]):
         if event.key == "enter":
             if isinstance(self.app.focused, Input):
                 self._confirm()
-
-
-def _truncate_line(text: str, max_width: int) -> str:
-    if max_width <= 0:
-        return ""
-    if len(text) <= max_width:
-        return text
-    if max_width <= 1:
-        return text[:max_width]
-    return text[: max_width - 1] + "…"
 
 
 def ellipsize(text: str, max_len: int) -> str:
