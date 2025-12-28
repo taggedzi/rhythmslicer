@@ -33,6 +33,7 @@ from rhythm_slicer.hangwatch import HangWatchdog, dump_threads
 from rhythm_slicer.logging_setup import set_console_level
 from rhythm_slicer.ui.frame_player import FramePlayer
 from rhythm_slicer.ui.help_modal import HelpModal
+from rhythm_slicer.ui.play_order import build_play_order
 from rhythm_slicer.ui.playlist_builder import PlaylistBuilderScreen
 from rhythm_slicer.ui.textual_compat import Panel
 from rhythm_slicer.ui.tui_formatters import (
@@ -60,25 +61,6 @@ from rhythm_slicer.playlist import (
 )
 
 logger = logging.getLogger(__name__)
-
-
-def build_play_order(
-    count: int,
-    current_index: int,
-    shuffle: bool,
-    rng: random.Random,
-) -> tuple[list[int], int]:
-    """Build a play order and return the order plus the current position."""
-    if count <= 0:
-        return [], -1
-    order = list(range(count))
-    if shuffle and count > 1:
-        rng.shuffle(order)
-    try:
-        position = order.index(current_index)
-    except ValueError:
-        position = 0
-    return order, position
 
 
 class TransportControls(Static):
