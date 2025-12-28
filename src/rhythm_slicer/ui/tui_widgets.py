@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from typing import TYPE_CHECKING, cast
+from typing import TYPE_CHECKING, Any, cast
 
 from textual import events
 from textual.app import ComposeResult
@@ -9,6 +9,8 @@ from textual.widgets import Button, DataTable, Static
 
 if TYPE_CHECKING:
     from rhythm_slicer.tui import RhythmSlicerApp
+else:
+    RhythmSlicerApp = Any
 
 
 class VisualizerHud(Static):
