@@ -46,12 +46,12 @@ from rhythm_slicer.ui.textual_compat import Panel
 from rhythm_slicer.ui.tui_formatters import (
     ellipsize,
     _format_time_ms,
-    _truncate_line,
     ratio_from_click,
     target_ms_from_ratio,
     render_visualizer,
     visualizer_bars,
 )
+from rhythm_slicer.ui.text_helpers import _truncate_line
 from rhythm_slicer.ui.visualizer_rendering import (
     center_visualizer_message,
     clip_frame_text,

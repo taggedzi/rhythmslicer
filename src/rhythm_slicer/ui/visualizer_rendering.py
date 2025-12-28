@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from rhythm_slicer.ui.tui_formatters import _truncate_line
+from rhythm_slicer.ui.text_helpers import _truncate_line
 
 
 def tiny_visualizer_text(width: int, height: int) -> str:

@@ -6,7 +6,7 @@ from typing import Callable, Optional
 
 from rich.text import Text
 
-from rhythm_slicer.ui.tui_formatters import _truncate_line
+from rhythm_slicer.ui.text_helpers import _truncate_line
 from rhythm_slicer.ui.tui_types import StatusMessage
 
 
