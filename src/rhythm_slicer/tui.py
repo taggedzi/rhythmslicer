@@ -52,6 +52,12 @@ from rhythm_slicer.ui.tui_formatters import (
     render_visualizer,
     visualizer_bars,
 )
+from rhythm_slicer.ui.visualizer_rendering import (
+    center_visualizer_message,
+    clip_frame_text,
+    tiny_visualizer_text,
+    visualizer_hud_size,
+)
 from rhythm_slicer.ui.tui_types import TrackSignature
 from rhythm_slicer.ui.tui_widgets import (
     PlaylistTable,
@@ -754,25 +760,10 @@ class RhythmSlicerApp(App):
         self.run_worker(load_meta(), exclusive=False)
 
     def _center_visualizer_message(self, message: str, width: int, height: int) -> str:
-        line = _truncate_line(message, width)
-        pad = max(0, (width - len(line)) // 2)
-        centered = (" " * pad + line).ljust(width)
-        top_pad = max(0, (height - 1) // 2)
-        lines = [" " * width for _ in range(top_pad)]
-        lines.append(centered)
-        lines.extend([" " * width for _ in range(max(0, height - len(lines)))])
-        return "\n".join(lines[:height])
+        return center_visualizer_message(message, width, height)
 
     def _visualizer_hud_size(self) -> tuple[int, int]:
-        if not self._visualizer_hud:
-            return (1, 1)
-        size = (
-            getattr(self._visualizer_hud, "content_size", None)
-            or self._visualizer_hud.size
-        )
-        width = max(1, getattr(size, "width", 1))
-        height = max(1, getattr(size, "height", 1))
-        return (width, height)
+        return visualizer_hud_size(self._visualizer_hud)
 
     def _current_track_signature(self) -> TrackSignature:
         track_key = (
@@ -1954,24 +1945,10 @@ class RhythmSlicerApp(App):
         self._viewport_height = height
 
     def _tiny_visualizer_text(self, width: int, height: int) -> str:
-        message = "Visualizer too small"
-        line = _truncate_line(message, width).ljust(width)
-        lines = [line] + [" " * width for _ in range(max(0, height - 1))]
-        return "\n".join(lines)
+        return tiny_visualizer_text(width, height)
 
     def _clip_frame_text(self, text: str, width: int, height: int) -> str:
-        if width <= 0 or height <= 0:
-            return ""
-        lines = text.splitlines()
-        if not lines:
-            lines = [""]
-        clipped: list[str] = []
-        for idx in range(height):
-            line = lines[idx] if idx < len(lines) else ""
-            if len(line) > width:
-                line = line[:width]
-            clipped.append(line.ljust(width))
-        return "\n".join(clipped)
+        return clip_frame_text(text, width, height)
 
     def _show_frame(self, frame: HackFrame) -> None:
         if not self._visualizer:
