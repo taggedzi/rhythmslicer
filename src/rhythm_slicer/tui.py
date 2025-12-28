@@ -33,6 +33,7 @@ from rhythm_slicer.logging_setup import set_console_level
 from rhythm_slicer.ui.frame_player import FramePlayer
 from rhythm_slicer.ui.help_modal import HelpModal
 from rhythm_slicer.ui.play_order import build_play_order
+from rhythm_slicer.ui.playlist_io import _load_recursive_directory
 from rhythm_slicer.ui.playlist_builder import PlaylistBuilderScreen
 from rhythm_slicer.ui.status_controller import StatusController
 from rhythm_slicer.ui.textual_compat import Panel
@@ -57,7 +58,6 @@ from rhythm_slicer.ui.tui_widgets import (
 from rhythm_slicer.visualizations.ansi import sanitize_ansi_sgr
 from rhythm_slicer.metadata import (
     TrackMeta,
-    format_display_title,
     get_cached_track_meta,
     get_track_meta,
 )
@@ -66,7 +66,6 @@ from rhythm_slicer.playlist import (
     Playlist,
     Track,
     load_from_input,
-    SUPPORTED_EXTENSIONS,
 )
 
 logger = logging.getLogger(__name__)
@@ -2565,21 +2564,6 @@ class OpenPrompt(ModalScreen[Optional[str]]):
         if event.key == "enter":
             if isinstance(self.app.focused, Input):
                 self._confirm()
-
-
-def _load_recursive_directory(path: Path) -> Playlist:
-    files = [
-        entry
-        for entry in path.rglob("*")
-        if entry.is_file() and entry.suffix.lower() in SUPPORTED_EXTENSIONS
-    ]
-    files.sort(key=lambda entry: entry.relative_to(path).as_posix().lower())
-    tracks = []
-    for entry in files:
-        meta = get_track_meta(entry)
-        title = format_display_title(entry, meta)
-        tracks.append(Track(path=entry, title=title))
-    return Playlist(tracks)
 
 
 def run_tui(path: str, player: VlcPlayer, *, viz_name: Optional[str] = None) -> int:
