@@ -68,24 +68,6 @@ def ellipsize(text: str, max_len: int) -> str:
     return text[: max_len - 3] + "..."
 
 
-def _parse_prompt_result(value: str) -> tuple[str, bool]:
-    if "::abs=" not in value:
-        return value, False
-    path, raw = value.rsplit("::abs=", 1)
-    return path, raw.strip() == "1"
-
-
-def _format_open_prompt_result(path: str, recursive: bool) -> str:
-    return f"{path}::recursive={int(recursive)}"
-
-
-def _parse_open_prompt_result(value: str) -> tuple[str, bool]:
-    if "::recursive=" not in value:
-        return value, False
-    path, raw = value.rsplit("::recursive=", 1)
-    return path, raw.strip() == "1"
-
-
 def ratio_from_click(x: int, width: int) -> float:
     """Map a click x position to a 0..1 ratio."""
     if width <= 1:
