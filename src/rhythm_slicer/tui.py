@@ -36,7 +36,6 @@ from rhythm_slicer.ui.help_modal import HelpModal
 from rhythm_slicer.ui.playlist_builder import PlaylistBuilderScreen
 from rhythm_slicer.ui.textual_compat import Panel
 from rhythm_slicer.ui.tui_formatters import (
-    _display_state,
     _format_time_ms,
     render_visualizer,
     visualizer_bars,
