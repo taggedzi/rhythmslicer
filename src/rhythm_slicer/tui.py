@@ -91,6 +91,7 @@ class StatusBar(Static):
 class RhythmSlicerApp(App):
     """RhythmSlicer Pro Textual application."""
 
+    # --- App constants & metadata ---
     CSS_PATH = "app.tcss"
     TITLE = "Rhythm Slicer Pro"
     MIN_WIDTH = 41
@@ -100,6 +101,7 @@ class RhythmSlicerApp(App):
     VISUALIZER_MAX_FPS = 12.0
     VISUALIZER_LOADING_STEP = 0.35
 
+    # --- Keybindings ---
     BINDINGS = [
         Binding("space", "toggle_playback", "Play/Pause"),
         Binding("s", "stop", "Stop"),
@@ -128,6 +130,7 @@ class RhythmSlicerApp(App):
         Binding("q", "quit_app", "Quit"),
     ]
 
+    # --- Lifecycle ---
     def __init__(
         self,
         *,
@@ -227,6 +230,7 @@ class RhythmSlicerApp(App):
         self._meta_loading: set[Path] = set()
         self._viz_request_id = 0
 
+    # --- Widget composition & layout ---
     def compose(self) -> ComposeResult:
         yield Header(show_clock=False)
         with Container(id="root"):
@@ -343,6 +347,7 @@ class RhythmSlicerApp(App):
         self._update_status_panel(force=True)
         logger.info("TUI mounted")
 
+    # --- Internal helpers ---
     def _install_asyncio_exception_handler(self) -> None:
         try:
             loop = asyncio.get_running_loop()
@@ -412,6 +417,7 @@ class RhythmSlicerApp(App):
             self._viz_name,
         )
 
+    # --- Status / HUD ---
     def _set_message(
         self,
         text: str,
@@ -564,9 +570,10 @@ class RhythmSlicerApp(App):
                 self._status_state_text.update(text)
             else:
                 self._status_state_text.update(display_text)
-            self._status_last_state_text = display_text
+                self._status_last_state_text = display_text
             self._status_last_message_level = message_level
 
+    # --- Playlist + transport ---
     def _render_modes(self) -> str:
         mode_map = {"off": "OFF", "one": "ONE", "all": "ALL"}
         repeat = mode_map.get(self._repeat_mode, "OFF")
@@ -629,6 +636,7 @@ class RhythmSlicerApp(App):
     def _update_screen_title(self) -> None:
         self.title = "Rhythm Slicer Pro"
 
+    # --- Visualizer ---
     def _render_visualizer(self) -> str:
         width, height = self._visualizer_viewport()
         if width <= 0 or height <= 0:
@@ -1300,6 +1308,7 @@ class RhythmSlicerApp(App):
         self._set_message("Seek unsupported", level="warn")
         return False
 
+    # --- Actions (Textual) ---
     def action_toggle_playback(self) -> None:
         state = (self.player.get_state() or "").lower()
         if "playing" in state:
@@ -1446,6 +1455,7 @@ class RhythmSlicerApp(App):
             start_path = Path.cwd()
         self.push_screen(PlaylistBuilderScreen(start_path))
 
+    # --- Event handlers ---
     def on_shutdown(self) -> None:
         logger.info("TUI shutdown")
         if self._hang_watchdog:
