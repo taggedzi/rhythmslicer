@@ -35,14 +35,16 @@ from rhythm_slicer.ui.help_modal import HelpModal
 from rhythm_slicer.ui.play_order import build_play_order
 from rhythm_slicer.ui.playlist_io import _load_recursive_directory
 from rhythm_slicer.ui.playlist_builder import PlaylistBuilderScreen
+from rhythm_slicer.ui.prompt_codec import (
+    _format_open_prompt_result,
+    _parse_open_prompt_result,
+    _parse_prompt_result,
+)
 from rhythm_slicer.ui.status_controller import StatusController
 from rhythm_slicer.ui.textual_compat import Panel
 from rhythm_slicer.ui.tui_formatters import (
     ellipsize,
     _format_time_ms,
-    _format_open_prompt_result,
-    _parse_open_prompt_result,
-    _parse_prompt_result,
     _truncate_line,
     ratio_from_click,
     target_ms_from_ratio,
