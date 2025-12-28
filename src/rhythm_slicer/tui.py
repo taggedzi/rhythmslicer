@@ -56,6 +56,7 @@ from rhythm_slicer.ui.visualizer_rendering import (
     center_visualizer_message,
     clip_frame_text,
     render_ansi_frame,
+    render_visualizer_mode,
     render_visualizer_view,
     tiny_visualizer_text,
     visualizer_hud_size,
@@ -510,15 +511,15 @@ class RhythmSlicerApp(App):
         )
 
     def _render_visualizer_mode(self, mode: str, width: int, height: int) -> str:
-        if width <= 0 or height <= 0:
-            return ""
-        if width <= 2 or height <= 1:
-            return self._tiny_visualizer_text(width, height)
-        message = mode
-        if mode == "LOADING":
-            phase = int(self._now() / self.VISUALIZER_LOADING_STEP) % 4
-            message = f"LOADING{'.' * phase}"
-        return self._center_visualizer_message(message, width, height)
+        return render_visualizer_mode(
+            mode,
+            width,
+            height,
+            now=self._now,
+            loading_step=self.VISUALIZER_LOADING_STEP,
+            tiny_text_fn=self._tiny_visualizer_text,
+            center_message_fn=self._center_visualizer_message,
+        )
 
     def _render_visualizer_hud(self) -> Text:
         width, height = self._visualizer_hud_size()
