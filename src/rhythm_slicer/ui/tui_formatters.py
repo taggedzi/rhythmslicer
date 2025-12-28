@@ -48,6 +48,16 @@ def _display_state(state: str) -> str:
     return state.capitalize() if state else "Unknown"
 
 
+def _truncate_line(text: str, max_width: int) -> str:
+    if max_width <= 0:
+        return ""
+    if len(text) <= max_width:
+        return text
+    if max_width <= 1:
+        return text[:max_width]
+    return text[: max_width - 1] + "…"
+
+
 def ratio_from_click(x: int, width: int) -> float:
     """Map a click x position to a 0..1 ratio."""
     if width <= 1:
