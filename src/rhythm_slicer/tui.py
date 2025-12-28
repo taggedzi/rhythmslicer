@@ -819,6 +819,7 @@ class RhythmSlicerApp(App):
         self._track_panel_last_signature = signature
         self._track_panel_last_track_key = track_key
 
+    # --- Playlist table (sizing + refresh) ---
     def _init_playlist_table(self) -> None:
         if not self._playlist_table:
             return
@@ -1085,6 +1086,24 @@ class RhythmSlicerApp(App):
                 self._missing_row_keys_logged.add(row_key)
                 logger.warning("Playlist row key missing: %s", row_key)
             return False
+
+    def _set_selected(
+        self,
+        index: int,
+        *,
+        move_cursor: bool = True,
+        update_selected_key: bool = True,
+    ) -> None:
+        if not self.playlist or self.playlist.is_empty():
+            return
+        index = max(0, min(index, len(self.playlist.tracks) - 1))
+        self.playlist.set_index(index)
+        self._sync_play_order_pos()
+        if update_selected_key:
+            self._selected_key = self._playlist_row_key(index)
+        if move_cursor:
+            self._move_table_cursor(index)
+        self._update_playlist_view()
 
     def _set_user_navigation_lockout(self) -> None:
         self._user_navigating_until = time.monotonic() + 1.0
@@ -1929,24 +1948,6 @@ class RhythmSlicerApp(App):
         if index >= len(self.playlist.tracks):
             return None
         return index
-
-    def _set_selected(
-        self,
-        index: int,
-        *,
-        move_cursor: bool = True,
-        update_selected_key: bool = True,
-    ) -> None:
-        if not self.playlist or self.playlist.is_empty():
-            return
-        index = max(0, min(index, len(self.playlist.tracks) - 1))
-        self.playlist.set_index(index)
-        self._sync_play_order_pos()
-        if update_selected_key:
-            self._selected_key = self._playlist_row_key(index)
-        if move_cursor:
-            self._move_table_cursor(index)
-        self._update_playlist_view()
 
     def _play_selected(self) -> None:
         if not self.playlist or self.playlist.is_empty():
