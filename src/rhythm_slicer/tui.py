@@ -73,6 +73,7 @@ from rhythm_slicer.playlist import (
 logger = logging.getLogger(__name__)
 
 
+# UI components
 class StatusBar(Static):
     """Status bar widget."""
 
@@ -86,6 +87,7 @@ class StatusBar(Static):
         return self._controller.render_line(width, focused=focused)
 
 
+# Main application
 class RhythmSlicerApp(App):
     """RhythmSlicer Pro Textual application."""
 
@@ -2381,6 +2383,7 @@ class RhythmSlicerApp(App):
         return sorted(set(names))
 
 
+# UI components
 class PlaylistPrompt(ModalScreen[Optional[str]]):
     """Modal prompt for playlist paths."""
 
@@ -2568,6 +2571,7 @@ class OpenPrompt(ModalScreen[Optional[str]]):
                 self._confirm()
 
 
+# Public entrypoints
 def run_tui(path: str, player: VlcPlayer, *, viz_name: Optional[str] = None) -> int:
     """Run the TUI and return an exit code."""
     logger.info("TUI start path=%s viz=%s", path, viz_name)
