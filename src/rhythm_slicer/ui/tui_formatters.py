@@ -66,6 +66,16 @@ def ratio_from_click(x: int, width: int) -> float:
     return clamped / float(width - 1)
 
 
+def render_status_bar(width: int, ratio: float) -> str:
+    if width <= 1:
+        return "█"[:width]
+    width = max(1, width)
+    inner = max(1, width - 2)
+    filled = int(max(0.0, min(1.0, ratio)) * inner)
+    bar = "=" * filled + "-" * max(0, inner - filled)
+    return f"[{bar}]" if width >= 2 else bar
+
+
 def target_ms_from_ratio(length_ms: int, ratio: float) -> int:
     """Return a target time in ms for a ratio of track length."""
     return int(max(0.0, min(1.0, ratio)) * max(0, length_ms))
