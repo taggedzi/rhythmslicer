@@ -59,6 +59,7 @@ from rhythm_slicer.ui.tui_formatters import (
     render_visualizer,
     visualizer_bars,
 )
+from rhythm_slicer.ui.widget_helpers import bar_widget_width
 from rhythm_slicer.ui.text_helpers import _truncate_line
 from rhythm_slicer.ui.visualizer_rendering import (
     center_visualizer_message,
@@ -441,8 +442,7 @@ class RhythmSlicerApp(App):
         )
 
     def _bar_widget_width(self, widget: Static) -> int:
-        size = getattr(widget, "content_size", None) or widget.size
-        return max(1, getattr(size, "width", 1))
+        return bar_widget_width(widget)
 
     # --- Rendering helpers ---
     def _render_status_bar(self, width: int, ratio: float) -> str:
