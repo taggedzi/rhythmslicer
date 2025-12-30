@@ -1,6 +1,13 @@
+from pathlib import Path
+
+from rhythm_slicer.metadata import TrackMeta
+from rhythm_slicer.playlist import Playlist, Track
 from rhythm_slicer.ui.visualizer_rendering import (
     center_visualizer_message,
     clip_frame_text,
+    render_ansi_frame,
+    render_visualizer_hud,
+    render_visualizer_mode,
     render_visualizer_view,
     tiny_visualizer_text,
     visualizer_hud_size,
@@ -230,3 +237,206 @@ def test_render_visualizer_view_playing_fallback() -> None:
     assert calls == {"bars": 1, "render_bars": 1, "render_mode": 0}
     assert seen["bars_args"] == (999, 5, 3)
     assert seen["render_bars_args"] == ("bars", 3)
+
+
+def test_render_visualizer_mode_invalid_size() -> None:
+    calls = {"tiny": 0, "center": 0}
+
+    def tiny_text_fn(width: int, height: int) -> str:
+        calls["tiny"] += 1
+        return "tiny"
+
+    def center_message_fn(message: str, width: int, height: int) -> str:
+        calls["center"] += 1
+        return message
+
+    assert (
+        render_visualizer_mode(
+            "PAUSED",
+            0,
+            3,
+            now=lambda: 0.0,
+            loading_step=1.0,
+            tiny_text_fn=tiny_text_fn,
+            center_message_fn=center_message_fn,
+        )
+        == ""
+    )
+    assert (
+        render_visualizer_mode(
+            "PAUSED",
+            3,
+            0,
+            now=lambda: 0.0,
+            loading_step=1.0,
+            tiny_text_fn=tiny_text_fn,
+            center_message_fn=center_message_fn,
+        )
+        == ""
+    )
+    assert calls == {"tiny": 0, "center": 0}
+
+
+def test_render_visualizer_mode_tiny() -> None:
+    calls = {"tiny": 0}
+
+    def tiny_text_fn(width: int, height: int) -> str:
+        calls["tiny"] += 1
+        return f"tiny:{width}x{height}"
+
+    assert (
+        render_visualizer_mode(
+            "STOPPED",
+            2,
+            3,
+            now=lambda: 0.0,
+            loading_step=1.0,
+            tiny_text_fn=tiny_text_fn,
+            center_message_fn=lambda message, width, height: "center",
+        )
+        == "tiny:2x3"
+    )
+    assert calls == {"tiny": 1}
+
+
+def test_render_visualizer_mode_loading_phase() -> None:
+    def center_message_fn(message: str, width: int, height: int) -> str:
+        return f"{message}:{width}x{height}"
+
+    assert (
+        render_visualizer_mode(
+            "LOADING",
+            5,
+            3,
+            now=lambda: 0.0,
+            loading_step=1.0,
+            tiny_text_fn=lambda width, height: "tiny",
+            center_message_fn=center_message_fn,
+        )
+        == "LOADING:5x3"
+    )
+    assert (
+        render_visualizer_mode(
+            "LOADING",
+            5,
+            3,
+            now=lambda: 1.0,
+            loading_step=1.0,
+            tiny_text_fn=lambda width, height: "tiny",
+            center_message_fn=center_message_fn,
+        )
+        == "LOADING.:5x3"
+    )
+    assert (
+        render_visualizer_mode(
+            "LOADING",
+            5,
+            3,
+            now=lambda: 3.0,
+            loading_step=1.0,
+            tiny_text_fn=lambda width, height: "tiny",
+            center_message_fn=center_message_fn,
+        )
+        == "LOADING...:5x3"
+    )
+
+
+def test_render_visualizer_mode_non_loading() -> None:
+    assert (
+        render_visualizer_mode(
+            "PAUSED",
+            5,
+            3,
+            now=lambda: 0.0,
+            loading_step=1.0,
+            tiny_text_fn=lambda width, height: "tiny",
+            center_message_fn=lambda message,
+            width,
+            height: f"{message}:{width}x{height}",
+        )
+        == "PAUSED:5x3"
+    )
+
+
+def test_render_ansi_frame_padding_and_truncation() -> None:
+    text = "\x1b[31mRED\x1b[0m\nOK"
+    rendered = render_ansi_frame(text, 4, 3)
+    assert rendered.plain == "RED \nOK  \n    "
+    assert render_ansi_frame("ABCDE", 3, 1).plain == "ABC"
+
+
+def test_tiny_visualizer_text_width_zero() -> None:
+    assert tiny_visualizer_text(0, 2) == "\n"
+
+
+def test_clip_frame_text_clips_to_height() -> None:
+    assert clip_frame_text("abcd\nefgh", 3, 1) == "abc"
+
+
+def test_render_visualizer_hud_invalid_size() -> None:
+    output = render_visualizer_hud(
+        width=0,
+        height=2,
+        playlist=None,
+        playing_index=None,
+        get_meta_cached=lambda path: None,
+        ensure_meta_loaded=lambda path: None,
+        ellipsize_fn=lambda text, max_len: text[:max_len],
+    )
+    assert output.plain == ""
+
+
+def test_render_visualizer_hud_no_playlist_defaults() -> None:
+    output = render_visualizer_hud(
+        width=14,
+        height=2,
+        playlist=None,
+        playing_index=None,
+        get_meta_cached=lambda path: None,
+        ensure_meta_loaded=lambda path: None,
+        ellipsize_fn=lambda text, max_len: text[:max_len],
+    )
+    lines = output.plain.split("\n")
+    assert len(lines) == 2
+    assert lines[0].startswith("TITLE: ")
+    assert all(len(line) == 14 for line in lines)
+
+
+def test_render_visualizer_hud_uses_cached_meta() -> None:
+    track = Track(path=Path("song.mp3"), title="fallback")
+    playlist = Playlist([track])
+    meta = TrackMeta(artist="Artist", title="Title", album="Album")
+    ensured: list[Path] = []
+
+    output = render_visualizer_hud(
+        width=20,
+        height=3,
+        playlist=playlist,
+        playing_index=0,
+        get_meta_cached=lambda path: meta,
+        ensure_meta_loaded=ensured.append,
+        ellipsize_fn=lambda text, max_len: text[:max_len],
+    )
+    assert "Title" in output.plain
+    assert "Artist" in output.plain
+    assert "Album" in output.plain
+    assert ensured == []
+
+
+def test_render_visualizer_hud_ensure_meta_loaded() -> None:
+    track = Track(path=Path("song.mp3"), title="")
+    playlist = Playlist([track])
+    ensured: list[Path] = []
+
+    output = render_visualizer_hud(
+        width=18,
+        height=3,
+        playlist=playlist,
+        playing_index=0,
+        get_meta_cached=lambda path: None,
+        ensure_meta_loaded=ensured.append,
+        ellipsize_fn=lambda text, max_len: text[:max_len],
+    )
+    assert track.path.name in output.plain
+    assert "Unknown" in output.plain
+    assert ensured == [track.path]
