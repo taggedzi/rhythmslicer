@@ -441,6 +441,76 @@ PlaylistFilePicker {
     margin-bottom: 1;
 }
 
+PlaylistSavePicker {
+    align: center middle;
+}
+
+#playlist_save_picker {
+    layout: vertical;
+    width: 90%;
+    max-width: 120;
+    min-width: 60;
+    height: 80%;
+    padding: 1 2;
+    border: round $accent;
+    background: $panel;
+}
+
+#save_picker_title {
+    width: 100%;
+    content-align: left middle;
+    margin-bottom: 1;
+}
+
+#save_picker_body {
+    width: 100%;
+    height: 1fr;
+}
+
+#save_picker_tree {
+    width: 1fr;
+    height: 1fr;
+    border: round $accent;
+}
+
+#save_picker_details {
+    width: 40%;
+    min-width: 30;
+    height: 1fr;
+    padding-left: 1;
+}
+
+#save_picker_filename_label {
+    width: 100%;
+    content-align: left middle;
+}
+
+#save_picker_filename {
+    width: 100%;
+    margin-bottom: 1;
+}
+
+#save_picker_destination {
+    width: 100%;
+    text-wrap: wrap;
+    margin-bottom: 1;
+}
+
+#save_picker_absolute {
+    width: 100%;
+    height: 3;
+    padding: 0 1;
+    content-align: left middle;
+    margin-bottom: 1;
+}
+
+#save_picker_buttons {
+    width: 100%;
+    height: 3;
+    margin-top: 1;
+    align: right middle;
+}
+
 HelpModal {
     align: center middle;
 }
