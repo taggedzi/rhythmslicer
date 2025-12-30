@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import math
-from typing import Optional
+from typing import Callable, Optional
 
 
 def visualizer_bars(seed_ms: int, width: int, height: int) -> list[int]:
@@ -56,6 +56,27 @@ def ellipsize(text: str, max_len: int) -> str:
     if max_len <= 3:
         return "." * max_len
     return text[: max_len - 3] + "..."
+
+
+def format_status_time(
+    *,
+    loading: bool,
+    get_position_ms: Callable[[], Optional[int]],
+    get_length_ms: Callable[[], Optional[int]],
+) -> tuple[str, int]:
+    if loading:
+        return "--:-- / --:--", 0
+    position_ms = get_position_ms()
+    length_ms = get_length_ms()
+    if not length_ms or length_ms <= 0 or position_ms is None:
+        return "--:-- / --:--", 0
+    position_ms = max(0, position_ms)
+    length_ms = max(0, length_ms)
+    ratio = min(1.0, position_ms / float(length_ms)) if length_ms else 0.0
+    progress = int(ratio * 100)
+    position_text = _format_time_ms(position_ms) or "--:--"
+    length_text = _format_time_ms(length_ms) or "--:--"
+    return f"{position_text} / {length_text}", progress
 
 
 def ratio_from_click(x: int, width: int) -> float:
