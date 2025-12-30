@@ -17,6 +17,7 @@ dist/
 .venv/
 venv/
 ENV/
+.uenv/
 
 # Installer logs
 pip-log.txt
