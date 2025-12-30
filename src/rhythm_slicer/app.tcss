@@ -638,9 +638,19 @@ DrivePrompt {
     background: $panelB;
 }
 
-#builder_browser,
+#builder_file_browser,
 #builder_playlist {
     width: 100%;
+    height: 1fr;
+}
+
+#builder_file_browser #file_browser_tree {
+    width: 100%;
+    height: 1fr;
+}
+
+#builder_file_browser #file_browser_list {
+    width: 1fr;
     height: 1fr;
 }
 
@@ -663,13 +673,4 @@ DrivePrompt {
     height: 3;
     padding: 0 1;
     content-align: center middle;
-}
-
-#builder_hints {
-    height: 1;
-    width: 100%;
-    padding: 0 1;
-    background: $transport_bg;
-    color: $text_dim;
-    text-wrap: nowrap;
 }
