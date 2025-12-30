@@ -34,6 +34,10 @@ from rhythm_slicer.ui.help_modal import HelpModal
 from rhythm_slicer.ui.bindings import normalize_bindings
 from rhythm_slicer.ui.playlist_table_manager import PlaylistTableManager
 from rhythm_slicer.ui.play_order import build_play_order
+from rhythm_slicer.ui.playlist_file_picker import (
+    PlaylistFilePicker,
+    pick_start_directory,
+)
 from rhythm_slicer.ui.playlist_io import _load_recursive_directory
 from rhythm_slicer.ui.playlist_builder import PlaylistBuilderScreen
 from rhythm_slicer.ui.prompt_codec import (
@@ -1788,12 +1792,11 @@ class RhythmSlicerApp(App):
         logger.info("Playlist saved to %s", dest)
 
     async def _load_playlist_flow(self) -> None:
-        default = str(self._last_playlist_path) if self._last_playlist_path else ""
-        result = await self.push_screen_wait(PlaylistPrompt("Load Playlist", default))
+        start_directory = pick_start_directory(self._last_playlist_path, Path.cwd())
+        result = await self.push_screen_wait(PlaylistFilePicker(start_directory))
         if not result:
             return
-        path_str, _ = _parse_prompt_result(result)
-        path = Path(path_str).expanduser()
+        path = result.expanduser()
         try:
             new_playlist = load_from_input(path)
         except Exception as exc:

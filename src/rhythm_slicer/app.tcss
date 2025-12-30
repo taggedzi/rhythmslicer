@@ -336,6 +336,10 @@ PlaylistPrompt {
     align: center middle;
 }
 
+PlaylistFilePicker {
+    align: center middle;
+}
+
 #playlist_prompt {
     layout: vertical;
     width: 60%;
@@ -344,6 +348,57 @@ PlaylistPrompt {
     padding: 1 2;
     border: round $accent;
     background: $panel;
+}
+
+#playlist_file_picker {
+    layout: vertical;
+    width: 80%;
+    max-width: 110;
+    min-width: 50;
+    height: 80%;
+    padding: 1 2;
+    border: round $accent;
+    background: $panel;
+}
+
+#playlist_file_title {
+    width: 100%;
+    content-align: left middle;
+    margin-bottom: 1;
+}
+
+#playlist_file_body {
+    width: 100%;
+    height: 1fr;
+}
+
+#playlist_file_tree {
+    width: 1fr;
+    min-width: 24;
+    height: 1fr;
+    margin-right: 1;
+    border: round $cyan_dim;
+    background: $panelA;
+}
+
+#playlist_file_list {
+    width: 1fr;
+    height: 1fr;
+    border: round $cyan_dim;
+    background: $panelA;
+}
+
+#playlist_file_selected {
+    width: 100%;
+    content-align: left middle;
+    margin-top: 1;
+}
+
+#playlist_file_buttons {
+    width: 100%;
+    height: 3;
+    margin-top: 1;
+    align: right middle;
 }
 
 #prompt_title {
