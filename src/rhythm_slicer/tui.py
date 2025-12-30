@@ -48,7 +48,6 @@ from rhythm_slicer.ui.playlist_save_picker import (
 from rhythm_slicer.ui.prompt_codec import (
     _format_open_prompt_result,
     _parse_open_prompt_result,
-    _parse_prompt_result,
 )
 from rhythm_slicer.ui.status_controller import StatusController
 from rhythm_slicer.ui.status_panel import (
