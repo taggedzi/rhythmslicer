@@ -42,6 +42,11 @@ from rhythm_slicer.ui.prompt_codec import (
     _parse_prompt_result,
 )
 from rhythm_slicer.ui.status_controller import StatusController
+from rhythm_slicer.ui.status_panel import (
+    StatusPanelCache,
+    StatusPanelWidgets,
+    update_status_panel,
+)
 from rhythm_slicer.ui.textual_compat import Panel
 from rhythm_slicer.ui.tui_formatters import (
     ellipsize,
@@ -209,20 +214,22 @@ class RhythmSlicerApp(App):
         self._status_speed_bar: Optional[Static] = None
         self._status_speed_text: Optional[Static] = None
         self._status_state_text: Optional[Static] = None
-        self._status_last_time_text: Optional[str] = None
-        self._status_last_time_value: Optional[int] = None
-        self._status_last_volume_value: Optional[int] = None
-        self._status_last_volume_text: Optional[str] = None
-        self._status_last_speed_value: Optional[float] = None
-        self._status_last_speed_text: Optional[str] = None
-        self._status_last_message_level: Optional[str] = None
-        self._status_last_state_text: Optional[str] = None
         self._ui_tick_count = 0
         self._volume_scrub_active = False
         self._speed_scrub_active = False
-        self._status_last_time_bar_text: Optional[str] = None
-        self._status_last_volume_bar_text: Optional[str] = None
-        self._status_last_speed_bar_text: Optional[str] = None
+        self._status_panel_cache = StatusPanelCache(
+            last_time_text=None,
+            last_time_value=None,
+            last_time_bar_text=None,
+            last_volume_text=None,
+            last_volume_value=None,
+            last_volume_bar_text=None,
+            last_speed_text=None,
+            last_speed_value=None,
+            last_speed_bar_text=None,
+            last_state_text=None,
+            last_message_level=None,
+        )
         self._frame_player = FramePlayer(self)
         self._current_track_path: Optional[Path] = None
         self._viewport_width = 1
@@ -594,76 +601,27 @@ class RhythmSlicerApp(App):
             or not self._status_state_text
         ):
             return
-
-        time_text, time_value = self._format_status_time()
-        if force or time_text != self._status_last_time_text:
-            self._status_time_text.update(time_text)
-            self._status_last_time_text = time_text
-        if force or time_value != self._status_last_time_value:
-            bar_width = self._bar_widget_width(self._status_time_bar)
-            bar_text = self._render_status_bar(bar_width, time_value / 100.0)
-            if force or bar_text != self._status_last_time_bar_text:
-                self._status_time_bar.update(bar_text)
-                self._status_last_time_bar_text = bar_text
-            self._status_last_time_value = time_value
-
-        volume_value = max(0, min(self._volume, 100))
-        volume_text = f"{volume_value:3d}"
-        if force or volume_text != self._status_last_volume_text:
-            self._status_volume_text.update(volume_text)
-            self._status_last_volume_text = volume_text
-        if force or volume_value != self._status_last_volume_value:
-            bar_width = self._bar_widget_width(self._status_volume_bar)
-            bar_text = self._render_status_bar(bar_width, volume_value / 100.0)
-            if force or bar_text != self._status_last_volume_bar_text:
-                self._status_volume_bar.update(bar_text)
-                self._status_last_volume_bar_text = bar_text
-            self._status_last_volume_value = volume_value
-
-        speed_value = self._playback_rate
-        speed_text = f"{speed_value:0.2f}x"
-        if force or speed_text != self._status_last_speed_text:
-            self._status_speed_text.update(speed_text)
-            self._status_last_speed_text = speed_text
-        if force or speed_value != self._status_last_speed_value:
-            bar_width = self._bar_widget_width(self._status_speed_bar)
-            ratio = (speed_value - 0.5) / (4.0 - 0.5)
-            bar_text = self._render_status_bar(bar_width, ratio)
-            if force or bar_text != self._status_last_speed_bar_text:
-                self._status_speed_bar.update(bar_text)
-                self._status_last_speed_bar_text = bar_text
-            self._status_last_speed_value = speed_value
-
-        message = self._status_controller._current_message()
-        message_text = message.text.splitlines()[0] if message else ""
-        message_level = message.level if message else None
-        normalized = message_text.strip().lower()
-        if normalized in {"playing", "paused", "stopped", "loading", "loading..."}:
-            message_text = ""
-            message_level = None
-        state_text = self._status_state_label()
-        display_text = (
-            f"{state_text} {message_text}" if message_text else state_text
-        ).rstrip()
-        if (
-            force
-            or display_text != self._status_last_state_text
-            or message_level != self._status_last_message_level
-        ):
-            style = None
-            if message_level == "warn":
-                style = "#ffcc66"
-            elif message_level == "error":
-                style = "#ff5f52"
-            if message_text and style:
-                text = Text(state_text)
-                text.append(" ")
-                text.append(message_text, style=style)
-                self._status_state_text.update(text)
-            else:
-                self._status_state_text.update(display_text)
-                self._status_last_state_text = display_text
-            self._status_last_message_level = message_level
+        widgets = StatusPanelWidgets(
+            time_bar=self._status_time_bar,
+            time_text=self._status_time_text,
+            volume_bar=self._status_volume_bar,
+            volume_text=self._status_volume_text,
+            speed_bar=self._status_speed_bar,
+            speed_text=self._status_speed_text,
+            state_text=self._status_state_text,
+        )
+        update_status_panel(
+            widgets=widgets,
+            cache=self._status_panel_cache,
+            force=force,
+            format_status_time=self._format_status_time,
+            volume=self._volume,
+            playback_rate=self._playback_rate,
+            bar_widget_width=self._bar_widget_width,
+            render_status_bar=self._render_status_bar,
+            status_state_label=self._status_state_label,
+            current_message=self._status_controller._current_message,
+        )
 
     # --- Playlist + transport ---
 
