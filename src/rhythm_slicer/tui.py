@@ -149,7 +149,7 @@ class RhythmSlicerApp(App):
         Binding("q", "quit_app", "Quit"),
     ]
 
-    # --- Lifecycle ---
+    # ===== Construction / lifecycle =====
     def __init__(
         self,
         *,
@@ -252,7 +252,7 @@ class RhythmSlicerApp(App):
         self._viz_request_id = 0
         self._playlist_table_manager = PlaylistTableManager(self)
 
-    # --- Widget composition & layout ---
+    # ===== Layout / sizing helpers =====
     def compose(self) -> ComposeResult:
         yield Header(show_clock=False)
         with Container(id="root"):
@@ -412,6 +412,7 @@ class RhythmSlicerApp(App):
         )
         save_config(self._config)
 
+    # ===== Status panel =====
     def _status_state_label(self) -> str:
         return status_state_label(
             playback_state_label=self._playback_state_label,
@@ -473,7 +474,7 @@ class RhythmSlicerApp(App):
     def _render_header(self) -> str:
         return "<< Rhythm Slicer Pro >>"
 
-    # --- Visualizer ---
+    # ===== Visualizer =====
     def _render_visualizer(self) -> str:
         width, height = self._visualizer_viewport()
         if width <= 0 or height <= 0 or width <= 2 or height <= 1:
@@ -724,7 +725,7 @@ class RhythmSlicerApp(App):
         self._track_panel_last_signature = signature
         self._track_panel_last_track_key = track_key
 
-    # --- Playlist table (sizing + refresh) ---
+    # ===== Playlist table integration =====
     def _init_playlist_table(self) -> None:
         self._playlist_table_manager._init_playlist_table()
 
@@ -986,6 +987,7 @@ class RhythmSlicerApp(App):
             return "paused"
         return "playing"
 
+    # ===== Hackscript / frame player =====
     def _restart_hackscript_from_player(self) -> None:
         if self._viz_restart_timer is not None:
             stopper = getattr(self._viz_restart_timer, "stop", None)
@@ -1033,7 +1035,7 @@ class RhythmSlicerApp(App):
         self._set_message("Seek unsupported", level="warn")
         return False
 
-    # --- Actions (Textual) ---
+    # ===== Transport / playback actions =====
     def action_toggle_playback(self) -> None:
         state = (self.player.get_state() or "").lower()
         if "playing" in state:
@@ -1269,7 +1271,7 @@ class RhythmSlicerApp(App):
     def _help_bindings(self) -> list[Binding]:
         return normalize_bindings(self.BINDINGS)
 
-    # --- Event handlers ---
+    # ===== Mouse / keyboard event handlers =====
     async def on_mount(self) -> None:
         self._update_screen_title()
         self._visualizer = self.query_one("#visualizer", Static)
@@ -1746,6 +1748,7 @@ class RhythmSlicerApp(App):
         self._play_order_pos = prev_pos
         return self._play_order[prev_pos]
 
+    # ===== Playlist IO flows =====
     def _default_save_path(self) -> Path:
         if self._last_playlist_path:
             return self._last_playlist_path
