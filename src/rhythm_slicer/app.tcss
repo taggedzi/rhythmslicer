@@ -642,6 +642,9 @@ DrivePrompt {
 #builder_playlist {
     width: 100%;
     height: 1fr;
+    overflow-x: hidden;
+    text-overflow: ellipsis;
+    text-wrap: nowrap;
 }
 
 #builder_file_browser #file_browser_tree {
@@ -680,6 +683,7 @@ DrivePrompt {
 }
 
 #builder_files_actions,
+#builder_playlist_header,
 #builder_playlist_actions {
     height: 3;
     width: 100%;
@@ -687,14 +691,23 @@ DrivePrompt {
     align: left middle;
 }
 
-#builder_playlist_actions {
-    align: right middle;
+#builder_playlist_header_spacer,
+#builder_playlist_actions_spacer {
+    width: 1fr;
 }
 
-#builder_files_actions Button,
-#builder_playlist_actions Button {
+#builder_files_actions Button {
     margin-right: 1;
     min-width: 6;
+    height: 3;
+    padding: 0 1;
+    content-align: center middle;
+}
+
+#builder_playlist_header Button,
+#builder_playlist_actions Button {
+    margin-right: 1;
+    min-width: 4;
     height: 3;
     padding: 0 1;
     content-align: center middle;

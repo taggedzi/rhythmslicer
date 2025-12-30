@@ -11,7 +11,7 @@ from textual.app import ComposeResult
 from textual.containers import Container, Horizontal, Vertical
 from textual.screen import Screen
 from textual.widget import Widget
-from textual.widgets import Button, DataTable
+from textual.widgets import Button, DataTable, Static
 
 from rhythm_slicer.metadata import get_track_meta
 from rhythm_slicer.playlist import Playlist, Track
@@ -52,6 +52,13 @@ class PlaylistBuilderScreen(Screen):
                 yield _panel_wrapper(
                     "Playlist",
                     Vertical(
+                        Horizontal(
+                            Button("Save", id="builder_playlist_save"),
+                            Button("Load", id="builder_playlist_load"),
+                            Static("", id="builder_playlist_header_spacer"),
+                            Button("Done", id="builder_done"),
+                            id="builder_playlist_header",
+                        ),
                         DataTable(id="builder_playlist"),
                         Horizontal(
                             Button(
@@ -59,9 +66,9 @@ class PlaylistBuilderScreen(Screen):
                                 id="builder_playlist_select_all",
                             ),
                             Button("Clear", id="builder_playlist_clear"),
-                            Button("Save", id="builder_playlist_save"),
-                            Button("Load", id="builder_playlist_load"),
-                            Button("Done", id="builder_done"),
+                            Static("", id="builder_playlist_actions_spacer"),
+                            Button("↑", id="builder_playlist_move_up"),
+                            Button("↓", id="builder_playlist_move_down"),
                             id="builder_playlist_actions",
                         ),
                         id="builder_right_stack",
@@ -93,6 +100,12 @@ class PlaylistBuilderScreen(Screen):
             self._playlist_selection.clear()
             self._refresh_playlist_entries()
             return
+        if button_id == "builder_playlist_move_up":
+            self._move_selected_tracks("up")
+            return
+        if button_id == "builder_playlist_move_down":
+            self._move_selected_tracks("down")
+            return
         if button_id == "builder_playlist_save":
             self._save_playlist(force_prompt=False)
             return
@@ -113,7 +126,7 @@ class PlaylistBuilderScreen(Screen):
             event.stop()
             return
         focused = getattr(self, "focused", None)
-        if focused is not self._playlist_table:
+        if not self._is_playlist_focus(focused):
             return
         if key == "space":
             self._toggle_playlist_selection()
@@ -147,6 +160,25 @@ class PlaylistBuilderScreen(Screen):
             event.stop()
             return
 
+    def _is_playlist_focus(self, focused: object | None) -> bool:
+        if focused is self._playlist_table:
+            return True
+        playlist_ids = {
+            "builder_playlist_save",
+            "builder_playlist_load",
+            "builder_done",
+            "builder_playlist_select_all",
+            "builder_playlist_clear",
+            "builder_playlist_move_up",
+            "builder_playlist_move_down",
+        }
+        current = focused
+        while current is not None:
+            if getattr(current, "id", None) in playlist_ids:
+                return True
+            current = getattr(current, "parent", None)
+        return False
+
     def _init_playlist_table(self) -> None:
         if not self._playlist_table:
             return
@@ -156,6 +188,7 @@ class PlaylistBuilderScreen(Screen):
         self._playlist_table.cursor_type = "row"
         self._playlist_table.show_cursor = True
         self._playlist_table.zebra_stripes = False
+        self._playlist_table.show_horizontal_scrollbar = False
 
     def _refresh_playlist_entries(self) -> None:
         if not self._playlist_table:
@@ -163,11 +196,15 @@ class PlaylistBuilderScreen(Screen):
         playlist = self._ensure_playlist()
         current_row = self._playlist_table.cursor_row or 0
         self._playlist_table.clear()
-        count_width = max(2, len(str(len(playlist.tracks) or 1)))
+        count_width = self._playlist_count_width()
         for index, track in enumerate(playlist.tracks):
             text = self._playlist_row_text(track, index, count_width)
             self._playlist_table.add_row(text, key=str(index))
         self._restore_cursor(self._playlist_table, current_row)
+
+    def _playlist_count_width(self) -> int:
+        playlist = self._ensure_playlist()
+        return max(2, len(str(len(playlist.tracks) or 1)))
 
     def _playlist_row_text(self, track: Track, index: int, count_width: int) -> Text:
         meta = get_track_meta(track.path)
@@ -180,7 +217,34 @@ class PlaylistBuilderScreen(Screen):
         marker = "[x]" if index in self._playlist_selection else "[ ]"
         label = f"{marker} {index + 1:>{count_width}d} {title}"
         style = "#5fc9d6" if index in self._playlist_selection else "#c6d0f2"
-        return Text(label, style=style)
+        return Text(label, style=style, overflow="ellipsis", no_wrap=True)
+
+    def _update_playlist_row(self, index: int) -> None:
+        if not self._playlist_table:
+            return
+        playlist = self._ensure_playlist()
+        if index < 0 or index >= len(playlist.tracks):
+            return
+        count_width = self._playlist_count_width()
+        text = self._playlist_row_text(playlist.tracks[index], index, count_width)
+        try:
+            self._playlist_table.update_cell(
+                str(index),
+                "track",
+                text,
+                update_width=False,
+            )
+        except Exception:
+            cursor_row = self._playlist_table.cursor_row
+            scroll_y = self._playlist_table.scroll_y
+            self._refresh_playlist_entries()
+            if cursor_row is not None:
+                self._playlist_table.move_cursor(
+                    row=cursor_row, column=0, scroll=False
+                )
+            self._playlist_table.scroll_to(
+                y=scroll_y, animate=False, immediate=True
+            )
 
     def _restore_cursor(self, table: DataTable, row: int) -> None:
         if table.row_count == 0:
@@ -204,7 +268,7 @@ class PlaylistBuilderScreen(Screen):
             self._playlist_selection.remove(index)
         else:
             self._playlist_selection.add(index)
-        self._refresh_playlist_entries()
+        self._update_playlist_row(index)
 
     def _remove_selected_tracks(self) -> None:
         playlist = self._ensure_playlist()
@@ -357,7 +421,7 @@ class PlaylistBuilderScreen(Screen):
             self._playlist_selection.remove(index)
         else:
             self._playlist_selection.add(index)
-        self._refresh_playlist_entries()
+        self._update_playlist_row(index)
 
     def on_data_table_row_highlighted(self, event: DataTable.RowHighlighted) -> None:
         if event.data_table is not self._playlist_table:

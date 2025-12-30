@@ -8,9 +8,9 @@ from pathlib import Path
 from textual.app import App
 from textual import events
 from textual.widget import Widget
-from textual.widgets import Button
+from textual.widgets import Button, DataTable
 
-from rhythm_slicer.playlist import Playlist
+from rhythm_slicer.playlist import Playlist, Track
 from rhythm_slicer.ui import playlist_builder
 from rhythm_slicer.ui.playlist_builder import PlaylistBuilderScreen
 
@@ -31,10 +31,10 @@ class DummyBrowser(Widget):
 class BuilderTestApp(App):
     CSS = ""
 
-    def __init__(self, start_path: Path) -> None:
+    def __init__(self, start_path: Path, playlist: Playlist | None = None) -> None:
         super().__init__()
         self._start_path = start_path
-        self.playlist = Playlist([])
+        self.playlist = playlist or Playlist([])
 
     def on_mount(self) -> None:
         self.call_later(self.push_screen, PlaylistBuilderScreen(self._start_path))
@@ -99,5 +99,90 @@ def test_playlist_builder_done_button_exits(tmp_path: Path, monkeypatch) -> None
             app.screen.on_button_pressed(Button.Pressed(done_button))
             await pilot.pause()
             assert not isinstance(app.screen, PlaylistBuilderScreen)
+
+    asyncio.run(runner())
+
+
+def _build_track(path: Path) -> Track:
+    return Track(path=path, title=path.stem)
+
+
+def test_playlist_builder_move_up_button_moves_selection(
+    tmp_path: Path, monkeypatch
+) -> None:
+    monkeypatch.setattr(playlist_builder, "FileBrowserWidget", DummyBrowser)
+    paths = [tmp_path / name for name in ("a.mp3", "b.mp3", "c.mp3")]
+    for path in paths:
+        path.write_text("x", encoding="utf-8")
+    playlist = Playlist([_build_track(path) for path in paths])
+
+    async def runner() -> None:
+        app = BuilderTestApp(tmp_path, playlist=playlist)
+        async with app.run_test() as pilot:
+            await _wait_for_builder(app, pilot)
+            app.screen._playlist_selection = {1}
+            app.screen._refresh_playlist_entries()
+            move_up = app.screen.query_one("#builder_playlist_move_up", Button)
+            app.screen.on_button_pressed(Button.Pressed(move_up))
+            await pilot.pause()
+            assert [track.path.name for track in app.playlist.tracks] == [
+                "b.mp3",
+                "a.mp3",
+                "c.mp3",
+            ]
+
+    asyncio.run(runner())
+
+
+def test_playlist_builder_move_down_button_moves_selection(
+    tmp_path: Path, monkeypatch
+) -> None:
+    monkeypatch.setattr(playlist_builder, "FileBrowserWidget", DummyBrowser)
+    paths = [tmp_path / name for name in ("a.mp3", "b.mp3", "c.mp3")]
+    for path in paths:
+        path.write_text("x", encoding="utf-8")
+    playlist = Playlist([_build_track(path) for path in paths])
+
+    async def runner() -> None:
+        app = BuilderTestApp(tmp_path, playlist=playlist)
+        async with app.run_test() as pilot:
+            await _wait_for_builder(app, pilot)
+            app.screen._playlist_selection = {1}
+            app.screen._refresh_playlist_entries()
+            move_down = app.screen.query_one("#builder_playlist_move_down", Button)
+            app.screen.on_button_pressed(Button.Pressed(move_down))
+            await pilot.pause()
+            assert [track.path.name for track in app.playlist.tracks] == [
+                "a.mp3",
+                "c.mp3",
+                "b.mp3",
+            ]
+
+    asyncio.run(runner())
+
+
+def test_playlist_builder_selection_toggle_preserves_scroll(
+    tmp_path: Path, monkeypatch
+) -> None:
+    monkeypatch.setattr(playlist_builder, "FileBrowserWidget", DummyBrowser)
+    paths = [tmp_path / f"track_{i}.mp3" for i in range(60)]
+    for path in paths:
+        path.write_text("x", encoding="utf-8")
+    playlist = Playlist([_build_track(path) for path in paths])
+
+    async def runner() -> None:
+        app = BuilderTestApp(tmp_path, playlist=playlist)
+        async with app.run_test() as pilot:
+            await _wait_for_builder(app, pilot)
+            table = app.screen.query_one("#builder_playlist", DataTable)
+            table.move_cursor(row=40, column=0, scroll=False)
+            table.scroll_to(y=10, animate=False, immediate=True)
+            await pilot.pause()
+            before_cursor = table.cursor_row
+            before_scroll = table.scroll_y
+            app.screen._toggle_playlist_selection()
+            await pilot.pause()
+            assert table.cursor_row == before_cursor
+            assert table.scroll_y == before_scroll
 
     asyncio.run(runner())
