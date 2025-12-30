@@ -52,6 +52,7 @@ from rhythm_slicer.ui.tui_formatters import (
     ellipsize,
     _format_time_ms,
     ratio_from_click,
+    render_status_bar,
     target_ms_from_ratio,
     render_visualizer,
     visualizer_bars,
@@ -453,13 +454,7 @@ class RhythmSlicerApp(App):
 
     # --- Rendering helpers ---
     def _render_status_bar(self, width: int, ratio: float) -> str:
-        if width <= 1:
-            return "█"[:width]
-        width = max(1, width)
-        inner = max(1, width - 2)
-        filled = int(max(0.0, min(1.0, ratio)) * inner)
-        bar = "=" * filled + "-" * max(0, inner - filled)
-        return f"[{bar}]" if width >= 2 else bar
+        return render_status_bar(width, ratio)
 
     # --- Playlist + transport ---
     def _render_modes(self) -> str:
