@@ -51,6 +51,7 @@ from rhythm_slicer.ui.textual_compat import Panel
 from rhythm_slicer.ui.tui_formatters import (
     ellipsize,
     format_status_time,
+    playback_state_label,
     ratio_from_click,
     render_status_bar,
     status_state_label,
@@ -419,16 +420,10 @@ class RhythmSlicerApp(App):
         )
 
     def _playback_state_label(self) -> str:
-        if self._loading:
-            return "LOADING"
-        state = (self.player.get_state() or "").lower()
-        if "playing" in state:
-            return "PLAYING"
-        if "paused" in state:
-            return "PAUSED"
-        if "stop" in state:
-            return "STOPPED"
-        return "STOPPED"
+        return playback_state_label(
+            playback_state=self.player.get_state() or "",
+            loading=self._loading,
+        )
 
     def _visualizer_mode(self) -> str:
         if self._loading:

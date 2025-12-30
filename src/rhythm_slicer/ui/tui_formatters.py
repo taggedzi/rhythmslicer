@@ -58,6 +58,19 @@ def status_state_label(
     return f"[ {label.ljust(7)} ]"
 
 
+def playback_state_label(*, playback_state: str, loading: bool) -> str:
+    if loading:
+        return "LOADING"
+    state = (playback_state or "").lower()
+    if "playing" in state:
+        return "PLAYING"
+    if "paused" in state:
+        return "PAUSED"
+    if "stop" in state:
+        return "STOPPED"
+    return "STOPPED"
+
+
 def ellipsize(text: str, max_len: int) -> str:
     if max_len <= 0:
         return ""
