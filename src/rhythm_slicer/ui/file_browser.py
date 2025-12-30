@@ -30,12 +30,27 @@ class FileBrowserItem(ListItem):
 class FileBrowserWidget(Widget):
     """Single-selection file browser backed by a DirectoryTree."""
 
-    def __init__(self, start_path: Path, **kwargs: object) -> None:
-        super().__init__(**kwargs)
+    def __init__(
+        self,
+        start_path: Path,
+        *,
+        name: str | None = None,
+        id: str | None = None,
+        classes: str | None = None,
+        disabled: bool = False,
+    ) -> None:
+        super().__init__(name=name, id=id, classes=classes, disabled=disabled)
         self._start_path = start_path
+        self._root = self._pick_root(start_path)
         self._selected_path: Optional[Path] = None
         self._current_directory = start_path
         self._show_files = _supports_show_files()
+
+    @staticmethod
+    def _pick_root(path: Path) -> Path:
+        if path.anchor:
+            return Path(path.anchor)
+        return Path("/")
 
     @property
     def selected_path(self) -> Optional[Path]:
@@ -50,19 +65,24 @@ class FileBrowserWidget(Widget):
 
     def compose(self) -> ComposeResult:
         if self._show_files:
-            yield DirectoryTree(
-                self._start_path, id="file_browser_tree", show_files=True
-            )
+            yield DirectoryTree(self._root, id="file_browser_tree", show_files=True)  # type: ignore[call-arg]
             return
         with Horizontal(id="file_browser_body"):
-            yield DirectoryTree(self._start_path, id="file_browser_tree")
+            yield DirectoryTree(self._root, id="file_browser_tree")
             yield ListView(id="file_browser_list")
 
     def on_mount(self) -> None:
         tree = self.query_one("#file_browser_tree", DirectoryTree)
         tree.focus()
+        self._update_root_label(tree)
         if not self._show_files:
-            self._refresh_file_list(self._start_path)
+            self._refresh_file_list(self._current_directory)
+
+    def _update_root_label(self, tree: DirectoryTree) -> None:
+        drive = self._root.drive
+        if not drive:
+            return
+        tree.root.set_label(f"{self._root} [{drive}]")
 
     def _refresh_file_list(self, directory: Path) -> None:
         self._current_directory = directory
