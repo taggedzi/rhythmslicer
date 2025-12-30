@@ -7,8 +7,9 @@ from pathlib import Path
 import sys
 
 from textual.app import App
-from textual.widgets import DirectoryTree
+from textual.widgets import DirectoryTree, ListView
 
+from rhythm_slicer.ui import file_browser
 from rhythm_slicer.ui.file_browser import FileBrowserWidget
 
 
@@ -106,5 +107,34 @@ def test_file_browser_drives_button_switches_root(tmp_path: Path, monkeypatch) -
             assert browser.current_directory == expected_root
             assert browser.selected_path == expected_root
             assert tree.path == expected_root
+
+    asyncio.run(runner())
+
+
+def test_file_browser_list_focusable_only_with_entries(
+    tmp_path: Path, monkeypatch
+) -> None:
+    monkeypatch.setattr(file_browser, "_supports_show_files", lambda: False)
+
+    async def runner() -> None:
+        app = FileBrowserApp(tmp_path)
+        async with app.run_test() as pilot:
+            await pilot.pause()
+            list_view = app.query_one("#file_browser_list", ListView)
+            tree = app.query_one("#file_browser_tree", DirectoryTree)
+            assert list_view.can_focus is False
+            list_view.can_focus = True
+            list_view.focus()
+            app.query_one("#file_browser", FileBrowserWidget)._refresh_file_list(
+                tmp_path
+            )
+            await pilot.pause()
+            assert tree.has_focus
+            (tmp_path / "track.mp3").write_text("x", encoding="utf-8")
+            app.query_one("#file_browser", FileBrowserWidget)._refresh_file_list(
+                tmp_path
+            )
+            await pilot.pause()
+            assert list_view.can_focus is True
 
     asyncio.run(runner())

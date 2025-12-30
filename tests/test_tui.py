@@ -90,8 +90,6 @@ def test_keybindings_route_playlist_builder() -> None:
     assert "b" not in by_key
 
 
-
-
 def test_status_message_timeout_shows_hint() -> None:
     current = [0.0]
     controller = tui.StatusController(now=lambda: current[0])
