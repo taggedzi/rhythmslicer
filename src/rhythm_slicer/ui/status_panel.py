@@ -9,8 +9,7 @@ from rich.text import Text
 
 
 class Updatable(Protocol):
-    def update(self, content: Any) -> None:
-        ...
+    def update(self, content: Any) -> None: ...
 
 
 @dataclass
