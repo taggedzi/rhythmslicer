@@ -12,6 +12,7 @@ def test_help_text_includes_keybinds() -> None:
     assert "Space — Play/Pause" in plain
     assert "Enter — Play Selected" in plain
     assert "V — Change visualization" in plain
+    assert "Ctrl+O — Playlist Builder" in plain
     assert "Q — Quit" in plain
     assert "Open help" in plain
     assert "Logs — %LOCALAPPDATA%/RhythmSlicer/logs" in plain

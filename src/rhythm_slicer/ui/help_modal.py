@@ -29,7 +29,6 @@ _SECTION_ACTIONS: dict[str, list[str]] = {
         "play_selected",
         "remove_selected",
         "save_playlist",
-        "open",
         "playlist_builder",
     ],
     "Visualizer": [
@@ -57,12 +56,12 @@ _BUILDER_HELP: list[tuple[str, str]] = [
     (
         "Files pane",
         "Up/Down Move | Enter/Right Open | Left Up | Space Select | "
-        "F5 Add | Ins Filter | Tab Switch | Esc Clear | b Back",
+        "F5 Add | Ins Filter | Tab Switch | Esc Clear/Back",
     ),
     (
         "Playlist pane",
         "Up/Down Move | Space Select | d Delete | u/j Move Up/Down | "
-        "s Save | S Save As | l Load | Tab Switch | Esc Clear | b Back",
+        "s Save | S Save As | l Load | Tab Switch | Esc Clear/Back",
     ),
 ]
 
