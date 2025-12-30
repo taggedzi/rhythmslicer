@@ -48,6 +48,16 @@ def _display_state(state: str) -> str:
     return state.capitalize() if state else "Unknown"
 
 
+def status_state_label(
+    *,
+    playback_state_label: Callable[[], str],
+    shuffle: bool,
+    repeat_mode: str,
+) -> str:
+    label = playback_state_label()
+    return f"[ {label.ljust(7)} ]"
+
+
 def ellipsize(text: str, max_len: int) -> str:
     if max_len <= 0:
         return ""

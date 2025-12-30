@@ -53,6 +53,7 @@ from rhythm_slicer.ui.tui_formatters import (
     format_status_time,
     ratio_from_click,
     render_status_bar,
+    status_state_label,
     target_ms_from_ratio,
     render_visualizer,
     visualizer_bars,
@@ -411,8 +412,11 @@ class RhythmSlicerApp(App):
         save_config(self._config)
 
     def _status_state_label(self) -> str:
-        label = self._playback_state_label()
-        return f"[ {label.ljust(7)} ]"
+        return status_state_label(
+            playback_state_label=self._playback_state_label,
+            shuffle=self._shuffle,
+            repeat_mode=self._repeat_mode,
+        )
 
     def _playback_state_label(self) -> str:
         if self._loading:
