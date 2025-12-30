@@ -50,7 +50,7 @@ from rhythm_slicer.ui.status_panel import (
 from rhythm_slicer.ui.textual_compat import Panel
 from rhythm_slicer.ui.tui_formatters import (
     ellipsize,
-    _format_time_ms,
+    format_status_time,
     ratio_from_click,
     render_status_bar,
     target_ms_from_ratio,
@@ -434,19 +434,11 @@ class RhythmSlicerApp(App):
         return self._playback_state_label()
 
     def _format_status_time(self) -> tuple[str, int]:
-        if self._loading:
-            return "--:-- / --:--", 0
-        position_ms = self.player.get_position_ms()
-        length_ms = self.player.get_length_ms()
-        if not length_ms or length_ms <= 0 or position_ms is None:
-            return "--:-- / --:--", 0
-        position_ms = max(0, position_ms)
-        length_ms = max(0, length_ms)
-        ratio = min(1.0, position_ms / float(length_ms)) if length_ms else 0.0
-        progress = int(ratio * 100)
-        position_text = _format_time_ms(position_ms) or "--:--"
-        length_text = _format_time_ms(length_ms) or "--:--"
-        return f"{position_text} / {length_text}", progress
+        return format_status_time(
+            loading=self._loading,
+            get_position_ms=self.player.get_position_ms,
+            get_length_ms=self.player.get_length_ms,
+        )
 
     def _bar_widget_width(self, widget: Static) -> int:
         size = getattr(widget, "content_size", None) or widget.size
