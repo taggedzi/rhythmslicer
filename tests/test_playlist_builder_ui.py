@@ -12,6 +12,7 @@ from textual.widgets import Button, DataTable
 
 from rhythm_slicer.playlist import Playlist, Track
 from rhythm_slicer.ui import playlist_builder
+from rhythm_slicer.ui.marquee import Marquee
 from rhythm_slicer.ui.playlist_builder import PlaylistBuilderScreen
 
 
@@ -184,5 +185,30 @@ def test_playlist_builder_selection_toggle_preserves_scroll(
             await pilot.pause()
             assert table.cursor_row == before_cursor
             assert table.scroll_y == before_scroll
+
+    asyncio.run(runner())
+
+
+def test_playlist_builder_highlight_updates_details(
+    tmp_path: Path, monkeypatch
+) -> None:
+    monkeypatch.setattr(playlist_builder, "FileBrowserWidget", DummyBrowser)
+    paths = [tmp_path / name for name in ("one.mp3", "two.mp3")]
+    for path in paths:
+        path.write_text("x", encoding="utf-8")
+    playlist = Playlist([_build_track(path) for path in paths])
+
+    async def runner() -> None:
+        app = BuilderTestApp(tmp_path, playlist=playlist)
+        async with app.run_test() as pilot:
+            await _wait_for_builder(app, pilot)
+            table = app.screen.query_one("#builder_playlist", DataTable)
+            table.move_cursor(row=1, column=0, scroll=False)
+            event = DataTable.RowHighlighted(table, 1, "1")
+            app.screen.on_data_table_row_highlighted(event)
+            await pilot.pause()
+            details = app.screen.query_one("#builder_playlist_details", Marquee)
+            assert paths[1].name in details.current_text
+            assert str(paths[1]) in details.full_text
 
     asyncio.run(runner())

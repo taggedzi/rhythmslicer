@@ -22,6 +22,7 @@ from rhythm_slicer.playlist_builder import (
 )
 from rhythm_slicer.playlist_io import save_m3u8
 from rhythm_slicer.ui.file_browser import FileBrowserWidget
+from rhythm_slicer.ui.marquee import Marquee
 
 
 class PlaylistBuilderScreen(Screen):
@@ -59,6 +60,7 @@ class PlaylistBuilderScreen(Screen):
                             Button("Done", id="builder_done"),
                             id="builder_playlist_header",
                         ),
+                        Marquee("", id="builder_playlist_details"),
                         DataTable(id="builder_playlist"),
                         Horizontal(
                             Button(
@@ -201,23 +203,44 @@ class PlaylistBuilderScreen(Screen):
             text = self._playlist_row_text(track, index, count_width)
             self._playlist_table.add_row(text, key=str(index))
         self._restore_cursor(self._playlist_table, current_row)
+        if playlist.tracks:
+            self._update_playlist_details(self._focused_playlist_index())
+        else:
+            self._clear_playlist_details()
 
     def _playlist_count_width(self) -> int:
         playlist = self._ensure_playlist()
         return max(2, len(str(len(playlist.tracks) or 1)))
 
     def _playlist_row_text(self, track: Track, index: int, count_width: int) -> Text:
-        meta = get_track_meta(track.path)
-        if meta.title and meta.artist:
-            title = f"{meta.title} - {meta.artist}"
-        elif meta.title:
-            title = meta.title
-        else:
-            title = track.path.name
+        title = self._playlist_display_title(track)
         marker = "[x]" if index in self._playlist_selection else "[ ]"
         label = f"{marker} {index + 1:>{count_width}d} {title}"
         style = "#5fc9d6" if index in self._playlist_selection else "#c6d0f2"
         return Text(label, style=style, overflow="ellipsis", no_wrap=True)
+
+    def _playlist_display_title(self, track: Track) -> str:
+        meta = get_track_meta(track.path)
+        if meta.title and meta.artist:
+            return f"{meta.title} - {meta.artist}"
+        if meta.title:
+            return meta.title
+        return track.path.name
+
+    def _playlist_details_text(self, track: Track) -> str:
+        title = self._playlist_display_title(track)
+        return f"{title} ({track.path})"
+
+    def _clear_playlist_details(self) -> None:
+        self.query_one("#builder_playlist_details", Marquee).set_text("")
+
+    def _update_playlist_details(self, index: Optional[int]) -> None:
+        playlist = self._ensure_playlist()
+        if index is None or index < 0 or index >= len(playlist.tracks):
+            self._clear_playlist_details()
+            return
+        details = self._playlist_details_text(playlist.tracks[index])
+        self.query_one("#builder_playlist_details", Marquee).set_text(details)
 
     def _update_playlist_row(self, index: int) -> None:
         if not self._playlist_table:
@@ -239,12 +262,8 @@ class PlaylistBuilderScreen(Screen):
             scroll_y = self._playlist_table.scroll_y
             self._refresh_playlist_entries()
             if cursor_row is not None:
-                self._playlist_table.move_cursor(
-                    row=cursor_row, column=0, scroll=False
-                )
-            self._playlist_table.scroll_to(
-                y=scroll_y, animate=False, immediate=True
-            )
+                self._playlist_table.move_cursor(row=cursor_row, column=0, scroll=False)
+            self._playlist_table.scroll_to(y=scroll_y, animate=False, immediate=True)
 
     def _restore_cursor(self, table: DataTable, row: int) -> None:
         if table.row_count == 0:
@@ -422,12 +441,14 @@ class PlaylistBuilderScreen(Screen):
         else:
             self._playlist_selection.add(index)
         self._update_playlist_row(index)
+        self._update_playlist_details(index)
 
     def on_data_table_row_highlighted(self, event: DataTable.RowHighlighted) -> None:
         if event.data_table is not self._playlist_table:
             return
         self.set_focus(self._playlist_table)
         event.stop()
+        self._update_playlist_details(event.cursor_row)
 
     def on_data_table_cell_selected(self, event: DataTable.CellSelected) -> None:
         if event.data_table is not self._playlist_table:
