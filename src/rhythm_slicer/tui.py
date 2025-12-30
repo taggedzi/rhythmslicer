@@ -142,11 +142,10 @@ class RhythmSlicerApp(App):
         Binding("h", "toggle_shuffle", "Shuffle"),
         Binding("v", "select_visualization", "Visualization"),
         Binding("ctrl+s", "save_playlist", "Save Playlist"),
-        Binding("ctrl+o", "open", "Open"),
+        Binding("ctrl+o", "playlist_builder", "Playlist Builder"),
         Binding("ctrl+shift+d", "dump_threads", "Dump Threads"),
         Binding("?", "show_help", "Help"),
         Binding("f1", "show_help", "Help"),
-        Binding("b", "playlist_builder", "Playlist Builder"),
         Binding("q", "quit_app", "Quit"),
     ]
 

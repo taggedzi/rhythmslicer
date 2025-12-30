@@ -32,11 +32,11 @@ class PlaylistBuilderScreen(Screen):
 
     BROWSER_HINTS = (
         "Up/Down Move | Enter/Right Open | Left Up | "
-        "Space Select | F5 Add | Ins Filter | Tab Switch | Esc Clear | b Back"
+        "Space Select | F5 Add | Ins Filter | Tab Switch | Esc Clear/Back"
     )
     PLAYLIST_HINTS = (
         "Up/Down Move | Space Select | d Delete | u/j Move Up/Down | "
-        "s Save | S Save As | l Load | Tab Switch | Esc Clear | b Back"
+        "s Save | S Save As | l Load | Tab Switch | Esc Clear/Back"
     )
 
     def __init__(self, start_path: Path) -> None:
@@ -183,12 +183,16 @@ class PlaylistBuilderScreen(Screen):
                 self._refresh_browser_entries()
                 event.stop()
                 return
-        if key == "b":
-            self.app.pop_screen()
-            event.stop()
-            return
         if key == "escape":
-            self._clear_selection()
+            has_selection = (
+                bool(self._browser.selected_paths())
+                if self._focused_pane == "browser"
+                else bool(self._playlist_selection)
+            )
+            if has_selection:
+                self._clear_selection()
+            else:
+                self.app.pop_screen()
             event.stop()
             return
         if not is_table_focus:
