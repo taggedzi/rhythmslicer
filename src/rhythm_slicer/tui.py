@@ -40,6 +40,11 @@ from rhythm_slicer.ui.playlist_file_picker import (
 )
 from rhythm_slicer.ui.playlist_io import _load_recursive_directory
 from rhythm_slicer.ui.playlist_builder import PlaylistBuilderScreen
+from rhythm_slicer.ui.playlist_save_picker import (
+    PlaylistSavePicker,
+    SaveResult,
+    save_mode_from_flag,
+)
 from rhythm_slicer.ui.prompt_codec import (
     _format_open_prompt_result,
     _parse_open_prompt_result,
@@ -1767,22 +1772,26 @@ class RhythmSlicerApp(App):
             self._set_message("Playlist is empty", level="warn")
             return
         default_path = self._default_save_path()
-        result = await self.push_screen_wait(
-            PlaylistPrompt(
-                "Save Playlist",
-                str(default_path),
-                show_absolute_toggle=True,
-                absolute_default=False,
+        start_directory = (
+            default_path.parent if default_path.parent.exists() else Path.cwd()
+        )
+        default_extension = default_path.suffix or ".m3u8"
+        default_filename = default_path.name or f"playlist{default_extension}"
+        result: Optional[SaveResult] = await self.push_screen_wait(
+            PlaylistSavePicker(
+                start_directory,
+                default_filename,
+                save_absolute_default=False,
+                default_extension=default_extension,
             )
         )
         if not result:
             return
-        dest_str, absolute = _parse_prompt_result(result)
-        dest = Path(dest_str).expanduser()
+        dest = result.target_path.expanduser()
         try:
             from rhythm_slicer.playlist_io import save_m3u8
 
-            save_m3u8(playlist, dest, mode="absolute" if absolute else "auto")
+            save_m3u8(playlist, dest, mode=save_mode_from_flag(result.save_absolute))
         except Exception as exc:
             logger.exception("Save playlist failed: %s", dest)
             self._set_message(f"Save failed: {exc}", level="error")
