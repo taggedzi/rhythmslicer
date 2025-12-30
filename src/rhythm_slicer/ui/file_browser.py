@@ -16,7 +16,6 @@ from textual.widgets import Button, DirectoryTree, Label, ListItem, ListView, St
 from rhythm_slicer.playlist_builder import list_drives
 from rhythm_slicer.ui.drive_prompt import DrivePrompt
 
-
 def _supports_show_files() -> bool:
     try:
         return "show_files" in inspect.signature(DirectoryTree).parameters
@@ -73,7 +72,9 @@ class FileBrowserWidget(Widget):
             with Horizontal(id="file_browser_header"):
                 yield Button("Up", id="file_browser_up")
                 yield Button("Drives", id="file_browser_drives")
-                yield Static("", id="file_browser_current")
+                current = Static("", id="file_browser_current")
+                current.can_focus = False
+                yield current
             if self._show_files:
                 with Container(id="file_browser_body"):
                     yield DirectoryTree(  # type: ignore[call-arg]
@@ -82,7 +83,9 @@ class FileBrowserWidget(Widget):
             else:
                 with Horizontal(id="file_browser_body"):
                     yield DirectoryTree(self._root, id="file_browser_tree")
-                    yield ListView(id="file_browser_list")
+                    list_view = ListView(id="file_browser_list")
+                    list_view.can_focus = False
+                    yield list_view
 
     def on_mount(self) -> None:
         tree = self.query_one("#file_browser_tree", DirectoryTree)
@@ -120,6 +123,10 @@ class FileBrowserWidget(Widget):
             )
         except OSError:
             entries = []
+        list_view.can_focus = bool(entries)
+        if not entries and list_view.has_focus:
+            tree = self.query_one("#file_browser_tree", DirectoryTree)
+            tree.focus()
         for entry in entries:
             list_view.append(FileBrowserItem(entry))
 
