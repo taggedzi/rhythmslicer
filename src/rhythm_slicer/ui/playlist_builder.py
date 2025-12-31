@@ -9,6 +9,7 @@ from multiprocessing.process import BaseProcess
 from multiprocessing.queues import Queue as MPQueue
 from pathlib import Path
 import queue
+import threading
 from typing import Callable, Optional
 
 from rich.text import Text
@@ -18,9 +19,8 @@ from textual.containers import Container, Horizontal, Vertical
 from textual.screen import ModalScreen, Screen
 from textual.timer import Timer
 from textual.widget import Widget
-from textual.widgets import Button, DataTable, Static
+from textual.widgets import Button, Static
 
-from rhythm_slicer.metadata import get_track_meta
 from rhythm_slicer.playlist import Playlist, Track
 from rhythm_slicer.playlist_builder import (
     build_track_from_path,
@@ -31,6 +31,7 @@ from rhythm_slicer.playlist_builder import (
 from rhythm_slicer.playlist_io import save_m3u8
 from rhythm_slicer.ui.file_browser import FileBrowserWidget
 from rhythm_slicer.ui.marquee import Marquee
+from rhythm_slicer.ui.virtual_playlist_list import VirtualPlaylistList
 
 
 @dataclass
@@ -38,8 +39,16 @@ class _ScanState:
     scan_id: int
     process: BaseProcess
     queue: MPQueue
-    poller: Timer
+    reader_thread: threading.Thread
     cancel_requested: bool = False
+
+
+@dataclass
+class _ScanProgress:
+    dirs: int = 0
+    files: int = 0
+    found: int = 0
+    path: str = ""
 
 
 class PlaylistBuilderScreen(Screen):
@@ -49,11 +58,17 @@ class PlaylistBuilderScreen(Screen):
         super().__init__()
         self._start_path = start_path
         self._file_browser: Optional[FileBrowserWidget] = None
-        self._playlist_table: Optional[DataTable] = None
-        self._playlist_selection: set[int] = set()
+        self._playlist_list: Optional[VirtualPlaylistList] = None
         self._scan_states: dict[int, _ScanState] = {}
         self._active_scan_id: int | None = None
         self._scan_id_counter = 0
+        self._scan_progress: _ScanProgress | None = None
+        self._scan_spinner_timer: Timer | None = None
+        self._scan_spinner_index = 0
+        self._scan_spinner_frames = ["|", "/", "-", "\\"]
+        self._scan_status_text = ""
+        self._pending_commit_scan_id: int | None = None
+        self._deferred_playlist_update = False
 
     def compose(self) -> ComposeResult:
         with Container(id="builder_root"):
@@ -67,6 +82,7 @@ class PlaylistBuilderScreen(Screen):
                             Button("Cancel", id="builder_files_cancel", disabled=True),
                             id="builder_files_actions",
                         ),
+                        Static("", id="builder_scan_status"),
                         id="builder_left_stack",
                     ),
                     panel_id="builder_left_panel",
@@ -82,7 +98,7 @@ class PlaylistBuilderScreen(Screen):
                             id="builder_playlist_header",
                         ),
                         Marquee("", id="builder_playlist_details"),
-                        DataTable(id="builder_playlist"),
+                        VirtualPlaylistList(id="builder_playlist"),
                         Horizontal(
                             Button(
                                 "Select All",
@@ -102,9 +118,11 @@ class PlaylistBuilderScreen(Screen):
 
     def on_mount(self) -> None:
         self._file_browser = self.query_one("#builder_file_browser", FileBrowserWidget)
-        self._playlist_table = self.query_one("#builder_playlist", DataTable)
-        self._init_playlist_table()
+        self._playlist_list = self.query_one(
+            "#builder_playlist", VirtualPlaylistList
+        )
         self._refresh_playlist_entries()
+        self._set_scan_status_visible(False)
 
     def on_button_pressed(self, event: Button.Pressed) -> None:
         button_id = event.button.id
@@ -123,15 +141,15 @@ class PlaylistBuilderScreen(Screen):
             return
         if button_id == "builder_playlist_select_all":
             playlist = self._ensure_playlist()
-            self._playlist_selection = set(range(len(playlist.tracks)))
-            self._refresh_playlist_entries()
+            if self._playlist_list:
+                self._playlist_list.check_all()
             return
         if button_id == "builder_playlist_remove":
             self.action_remove_from_playlist()
             return
         if button_id == "builder_playlist_clear":
-            self._playlist_selection.clear()
-            self._refresh_playlist_entries()
+            if self._playlist_list:
+                self._playlist_list.clear_checked()
             return
         if button_id == "builder_playlist_move_up":
             self._move_selected_tracks("up")
@@ -203,7 +221,7 @@ class PlaylistBuilderScreen(Screen):
             return
 
     def _is_playlist_focus(self, focused: object | None) -> bool:
-        if focused is self._playlist_table:
+        if focused is self._playlist_list:
             return True
         playlist_ids = {
             "builder_playlist_save",
@@ -222,50 +240,21 @@ class PlaylistBuilderScreen(Screen):
             current = getattr(current, "parent", None)
         return False
 
-    def _init_playlist_table(self) -> None:
-        if not self._playlist_table:
-            return
-        self._playlist_table.clear(columns=True)
-        self._playlist_table.add_column("Track", key="track")
-        self._playlist_table.show_header = False
-        self._playlist_table.cursor_type = "row"
-        self._playlist_table.show_cursor = True
-        self._playlist_table.zebra_stripes = False
-        self._playlist_table.show_horizontal_scrollbar = False
-
     def _refresh_playlist_entries(self) -> None:
-        if not self._playlist_table:
+        if not self._playlist_list:
             return
         playlist = self._ensure_playlist()
-        current_row = self._playlist_table.cursor_row or 0
-        self._playlist_table.clear()
-        count_width = self._playlist_count_width()
-        for index, track in enumerate(playlist.tracks):
-            text = self._playlist_row_text(track, index, count_width)
-            self._playlist_table.add_row(text, key=str(index))
-        self._restore_cursor(self._playlist_table, current_row)
+        self._playlist_list.set_tracks(playlist.tracks)
         if playlist.tracks:
             self._update_playlist_details(self._focused_playlist_index())
         else:
             self._clear_playlist_details()
 
-    def _playlist_count_width(self) -> int:
-        playlist = self._ensure_playlist()
-        return max(2, len(str(len(playlist.tracks) or 1)))
-
-    def _playlist_row_text(self, track: Track, index: int, count_width: int) -> Text:
-        title = self._playlist_display_title(track)
-        marker = "[x]" if index in self._playlist_selection else "[ ]"
-        label = f"{marker} {index + 1:>{count_width}d} {title}"
-        style = "#5fc9d6" if index in self._playlist_selection else "#c6d0f2"
-        return Text(label, style=style, overflow="ellipsis", no_wrap=True)
-
     def _playlist_display_title(self, track: Track) -> str:
-        meta = get_track_meta(track.path)
-        if meta.title and meta.artist:
-            return f"{meta.title} - {meta.artist}"
-        if meta.title:
-            return meta.title
+        if track.title and track.title != track.path.stem:
+            return track.title
+        if track.title:
+            return track.path.name
         return track.path.name
 
     def _playlist_details_text(self, track: Track) -> str:
@@ -283,52 +272,16 @@ class PlaylistBuilderScreen(Screen):
         details = self._playlist_details_text(playlist.tracks[index])
         self.query_one("#builder_playlist_details", Marquee).set_text(details)
 
-    def _update_playlist_row(self, index: int) -> None:
-        if not self._playlist_table:
-            return
-        playlist = self._ensure_playlist()
-        if index < 0 or index >= len(playlist.tracks):
-            return
-        count_width = self._playlist_count_width()
-        text = self._playlist_row_text(playlist.tracks[index], index, count_width)
-        try:
-            self._playlist_table.update_cell(
-                str(index),
-                "track",
-                text,
-                update_width=False,
-            )
-        except Exception:
-            cursor_row = self._playlist_table.cursor_row
-            scroll_y = self._playlist_table.scroll_y
-            self._refresh_playlist_entries()
-            if cursor_row is not None:
-                self._playlist_table.move_cursor(row=cursor_row, column=0, scroll=False)
-            self._playlist_table.scroll_to(y=scroll_y, animate=False, immediate=True)
-
-    def _restore_cursor(self, table: DataTable, row: int) -> None:
-        if table.row_count == 0:
-            return
-        target = max(0, min(row, table.row_count - 1))
-        table.move_cursor(row=target, column=0, scroll=False)
-
     def _focused_playlist_index(self) -> Optional[int]:
-        if not self._playlist_table:
+        if not self._playlist_list:
             return None
-        row = self._playlist_table.cursor_row
-        if row is None or row < 0:
+        if not self._playlist_list:
             return None
-        return row
+        return self._playlist_list.cursor_index
 
     def _toggle_playlist_selection(self) -> None:
-        index = self._focused_playlist_index()
-        if index is None:
-            return
-        if index in self._playlist_selection:
-            self._playlist_selection.remove(index)
-        else:
-            self._playlist_selection.add(index)
-        self._update_playlist_row(index)
+        if self._playlist_list:
+            self._playlist_list.toggle_checked_at_cursor()
 
     def _remove_selected_tracks(self) -> None:
         playlist = self._ensure_playlist()
@@ -352,7 +305,8 @@ class PlaylistBuilderScreen(Screen):
         removed_set = set(removed_indices)
         for index in removed_indices:
             playlist.remove(index)
-        self._playlist_selection.clear()
+        if self._playlist_list:
+            self._playlist_list.clear_checked()
         self._reconcile_playing_index_after_remove(
             playing_index,
             removed_set,
@@ -367,8 +321,10 @@ class PlaylistBuilderScreen(Screen):
         self._remove_selected_tracks()
 
     def _selected_or_focused_indices(self) -> set[int]:
-        if self._playlist_selection:
-            return set(self._playlist_selection)
+        if self._playlist_list:
+            checked = self._playlist_list.get_checked_indices()
+            if checked:
+                return set(checked)
         focused = self._focused_playlist_index()
         if focused is None:
             return set()
@@ -416,19 +372,18 @@ class PlaylistBuilderScreen(Screen):
         setattr(self.app, "_playing_index", None)
 
     def _restore_playlist_cursor(self, preferred_index: int) -> None:
-        if not self._playlist_table:
+        if not self._playlist_list:
             return
-        if self._playlist_table.row_count == 0:
+        if not self._ensure_playlist().tracks:
             return
-        target = max(0, min(preferred_index, self._playlist_table.row_count - 1))
-        self._playlist_table.move_cursor(row=target, column=0, scroll=False)
-        self._update_playlist_details(target)
+        self._playlist_list.set_cursor_index(preferred_index)
+        self._update_playlist_details(self._focused_playlist_index())
 
     def _move_selected_tracks(self, direction: str) -> None:
         playlist = self._ensure_playlist()
         if playlist.is_empty():
             return
-        selection = self._playlist_selection
+        selection = set(self._playlist_list.get_checked_indices()) if self._playlist_list else set()
         if not selection:
             # No selection means move the cursor row by default.
             focused = self._focused_playlist_index()
@@ -442,14 +397,14 @@ class PlaylistBuilderScreen(Screen):
             "up" if direction == "up" else "down",
         )
         playlist.tracks = reordered
-        self._playlist_selection = set(new_selection)
+        if self._playlist_list:
+            self._playlist_list.set_tracks(playlist.tracks)
+            self._playlist_list.set_checked_indices(new_selection)
         self._reconcile_playing_index(playing_path)
         self._refresh_playlist_after_edit()
         self._refresh_playlist_entries()
-        if self._playlist_table and new_selection:
-            self._playlist_table.move_cursor(
-                row=min(new_selection), column=0, scroll=False
-            )
+        if self._playlist_list and new_selection:
+            self._playlist_list.set_cursor_index(min(new_selection))
 
     def _save_playlist(self, *, force_prompt: bool) -> None:
         playlist = self._ensure_playlist()
@@ -480,7 +435,8 @@ class PlaylistBuilderScreen(Screen):
         if not callable(load_flow):
             return
         await load_flow()
-        self._playlist_selection.clear()
+        if self._playlist_list:
+            self._playlist_list.clear_checked()
         self._refresh_playlist_entries()
 
     def _refresh_playlist_after_edit(self) -> None:
@@ -489,9 +445,15 @@ class PlaylistBuilderScreen(Screen):
         if hasattr(self.app, "_sync_play_order_pos"):
             self.app._sync_play_order_pos()
         if hasattr(self.app, "_update_playlist_view"):
-            self.app._update_playlist_view()
+            if getattr(self.app, "screen", None) is self:
+                self._deferred_playlist_update = True
+            else:
+                self.app._update_playlist_view()
         if hasattr(self.app, "_refresh_transport_controls"):
-            self.app._refresh_transport_controls()
+            if getattr(self.app, "screen", None) is self:
+                self._deferred_playlist_update = True
+            else:
+                self.app._refresh_transport_controls()
 
     def _current_playing_path(self) -> Optional[Path]:
         playlist = getattr(self.app, "playlist", None)
@@ -547,6 +509,7 @@ class PlaylistBuilderScreen(Screen):
     ) -> None:
         if not paths:
             return
+        self._pending_commit_scan_id = None
         if self._active_scan_id is not None:
             self._cancel_active_scan()
         self._scan_id_counter += 1
@@ -564,19 +527,25 @@ class PlaylistBuilderScreen(Screen):
             ),
             daemon=True,
         )
-        poller: Timer = self.set_interval(
-            0.1,
-            lambda: self._poll_scan_queue(scan_id),
+        reader_thread = threading.Thread(
+            target=self._scan_queue_reader,
+            args=(scan_id, process, queue_handle),
+            daemon=True,
         )
         self._scan_states[scan_id] = _ScanState(
             scan_id=scan_id,
             process=process,
             queue=queue_handle,
-            poller=poller,
+            reader_thread=reader_thread,
         )
         self._active_scan_id = scan_id
+        self._scan_progress = _ScanProgress()
         self._refresh_scan_controls()
+        self._set_scan_status_visible(True)
+        self._start_scan_spinner()
+        self._update_scan_status()
         process.start()
+        reader_thread.start()
 
     def _cancel_active_scan(self) -> None:
         active = self._active_scan_id
@@ -592,28 +561,50 @@ class PlaylistBuilderScreen(Screen):
             pass
         self._refresh_scan_controls()
 
-    def _poll_scan_queue(self, scan_id: int) -> None:
+    def _scan_queue_reader(
+        self, scan_id: int, process: BaseProcess, queue_handle: MPQueue
+    ) -> None:
+        while True:
+            try:
+                message = queue_handle.get(timeout=0.2)
+            except queue.Empty:
+                if not process.is_alive():
+                    break
+                continue
+            if not isinstance(message, tuple) or not message:
+                continue
+            status = str(message[0])
+            payload = message[1] if len(message) > 1 else None
+            if status == "progress" and isinstance(payload, dict):
+                try:
+                    self.app.call_from_thread(
+                        self._handle_scan_progress, scan_id, payload
+                    )
+                except Exception:
+                    return
+                continue
+            try:
+                self.app.call_from_thread(
+                    self._handle_scan_result, scan_id, status, payload
+                )
+            except Exception:
+                return
+            return
+        try:
+            process.join(timeout=0)
+        except Exception:
+            pass
         state = self._scan_states.get(scan_id)
         if not state:
             return
+        status = "canceled" if state.cancel_requested else "error"
+        payload = None if status == "canceled" else "Scan process ended unexpectedly."
         try:
-            status, payload = state.queue.get_nowait()
-        except queue.Empty:
-            status = None
-            payload = None
-        if status is not None:
-            self._handle_scan_result(scan_id, status, payload)
+            self.app.call_from_thread(
+                self._handle_scan_result, scan_id, status, payload
+            )
+        except Exception:
             return
-        if not state.process.is_alive():
-            state.process.join(timeout=0)
-            if state.cancel_requested:
-                self._handle_scan_result(scan_id, "canceled", None)
-            else:
-                self._handle_scan_result(
-                    scan_id,
-                    "error",
-                    "Scan process ended unexpectedly.",
-                )
 
     def _handle_scan_result(
         self,
@@ -624,14 +615,12 @@ class PlaylistBuilderScreen(Screen):
         state = self._scan_states.pop(scan_id, None)
         if not state:
             return
-        try:
-            state.poller.stop()
-        except Exception:
-            pass
         was_active = self._active_scan_id == scan_id
         if was_active:
             self._active_scan_id = None
             self._refresh_scan_controls()
+            self._set_scan_status_visible(False)
+            self._stop_scan_spinner()
         if status != "ok":
             if status == "error" and hasattr(self.app, "_set_message"):
                 self.app._set_message(str(payload))
@@ -645,7 +634,62 @@ class PlaylistBuilderScreen(Screen):
         paths = [Path(item) for item in payload]
         if not paths:
             return
-        self._add_paths_to_playlist(paths)
+        self._start_commit_tracks(scan_id, payload)
+
+    def _start_commit_tracks(self, scan_id: int, payload: list[str]) -> None:
+        playlist_snapshot = list(self._ensure_playlist().tracks)
+        self._pending_commit_scan_id = scan_id
+
+        def worker() -> None:
+            existing = {self._resolve_path(track.path) for track in playlist_snapshot}
+            new_paths: list[Path] = []
+            for item in payload:
+                path = Path(item)
+                resolved = self._resolve_path(path)
+                if resolved in existing:
+                    continue
+                existing.add(resolved)
+                new_paths.append(path)
+            tracks = [build_track_from_path(path) for path in new_paths]
+            try:
+                self.app.call_from_thread(
+                    self._finalize_commit_tracks, scan_id, tracks
+                )
+            except Exception:
+                return
+
+        threading.Thread(target=worker, daemon=True).start()
+
+    def _finalize_commit_tracks(self, scan_id: int, tracks: list[Track]) -> None:
+        if scan_id != self._pending_commit_scan_id:
+            return
+        self._pending_commit_scan_id = None
+        if not tracks:
+            return
+        playlist = self._ensure_playlist()
+        playlist.tracks.extend(tracks)
+        if playlist.index < 0:
+            playlist.index = 0
+        self._refresh_playlist_after_edit()
+        self._refresh_playlist_entries()
+
+    def _handle_scan_progress(self, scan_id: int, payload: dict[str, object]) -> None:
+        if scan_id != self._active_scan_id:
+            return
+        try:
+            dirs = int(payload.get("dirs", 0))
+            files = int(payload.get("files", 0))
+            found = int(payload.get("found", 0))
+            path = str(payload.get("path", ""))
+        except Exception:
+            return
+        self._scan_progress = _ScanProgress(
+            dirs=dirs,
+            files=files,
+            found=found,
+            path=path,
+        )
+        self._update_scan_status()
 
     def _refresh_scan_controls(self) -> None:
         try:
@@ -662,6 +706,60 @@ class PlaylistBuilderScreen(Screen):
         cancel_button.label = (
             "Canceling..." if state and state.cancel_requested else "Cancel"
         )
+
+    def _start_scan_spinner(self) -> None:
+        if self._scan_spinner_timer is not None:
+            return
+        self._scan_spinner_timer = self.set_interval(0.1, self._advance_scan_spinner)
+
+    def _stop_scan_spinner(self) -> None:
+        if self._scan_spinner_timer is None:
+            return
+        try:
+            self._scan_spinner_timer.stop()
+        except Exception:
+            pass
+        self._scan_spinner_timer = None
+
+    def _advance_scan_spinner(self) -> None:
+        if self._active_scan_id is None:
+            return
+        self._scan_spinner_index = (self._scan_spinner_index + 1) % len(
+            self._scan_spinner_frames
+        )
+        self._update_scan_status()
+
+    def _update_scan_status(self) -> None:
+        try:
+            status = self.query_one("#builder_scan_status", Static)
+        except Exception:
+            return
+        if self._active_scan_id is None or self._scan_progress is None:
+            self._scan_status_text = ""
+            status.update("")
+            return
+        spinner = self._scan_spinner_frames[self._scan_spinner_index]
+        progress = self._scan_progress
+        state = self._scan_states.get(self._active_scan_id)
+        label = "Canceling..." if state and state.cancel_requested else "Scanning..."
+        text = (
+            f"{spinner} {label} "
+            f"Found: {progress.found} | "
+            f"Scanned: {progress.files} files / {progress.dirs} dirs | "
+            f"Current: {progress.path} | Esc/Cancel to stop"
+        )
+        self._scan_status_text = text
+        status.update(Text(text, overflow="ellipsis", no_wrap=True))
+
+    def _set_scan_status_visible(self, visible: bool) -> None:
+        try:
+            status = self.query_one("#builder_scan_status", Static)
+        except Exception:
+            return
+        status.display = visible
+        if not visible:
+            self._scan_status_text = ""
+            status.update("")
 
     def _get_process_context(self) -> SpawnContext:
         return multiprocessing.get_context("spawn")
@@ -695,40 +793,21 @@ class PlaylistBuilderScreen(Screen):
                 state.process.terminate()
             except Exception:
                 pass
-            try:
-                state.poller.stop()
-            except Exception:
-                pass
         self._active_scan_id = None
         self._refresh_scan_controls()
+        self._set_scan_status_visible(False)
+        self._stop_scan_spinner()
+        if self._deferred_playlist_update:
+            self._deferred_playlist_update = False
+            if hasattr(self.app, "_update_playlist_view"):
+                self.app._update_playlist_view()
+            if hasattr(self.app, "_refresh_transport_controls"):
+                self.app._refresh_transport_controls()
 
-    def on_data_table_row_selected(self, event: DataTable.RowSelected) -> None:
-        if event.data_table is not self._playlist_table:
-            return
-        self.set_focus(self._playlist_table)
-        event.stop()
-        index = self._focused_playlist_index()
-        if index is None:
-            return
-        if index in self._playlist_selection:
-            self._playlist_selection.remove(index)
-        else:
-            self._playlist_selection.add(index)
-        self._update_playlist_row(index)
-        self._update_playlist_details(index)
-
-    def on_data_table_row_highlighted(self, event: DataTable.RowHighlighted) -> None:
-        if event.data_table is not self._playlist_table:
-            return
-        self.set_focus(self._playlist_table)
-        event.stop()
-        self._update_playlist_details(event.cursor_row)
-
-    def on_data_table_cell_selected(self, event: DataTable.CellSelected) -> None:
-        if event.data_table is not self._playlist_table:
-            return
-        self.set_focus(self._playlist_table)
-        event.stop()
+    def on_virtual_playlist_list_cursor_moved(
+        self, message: VirtualPlaylistList.CursorMoved
+    ) -> None:
+        self._update_playlist_details(message.index)
 
     @staticmethod
     def _resolve_path(path: Path) -> Path:

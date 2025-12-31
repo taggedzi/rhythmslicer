@@ -1551,6 +1551,12 @@ class RhythmSlicerApp(App):
         logger.info("Visualization set to %s", selection)
 
     def _update_playlist_view(self) -> None:
+        try:
+            from rhythm_slicer.ui.playlist_builder import PlaylistBuilderScreen
+        except Exception:
+            PlaylistBuilderScreen = None  # type: ignore[assignment]
+        if PlaylistBuilderScreen and isinstance(self.screen, PlaylistBuilderScreen):
+            return
         if not self._playlist_list or not self.playlist:
             self._refresh_playlist_table()
             self._update_playlist_controls()

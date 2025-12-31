@@ -12,13 +12,14 @@ import pytest
 from textual.app import App
 from textual import events
 from textual.widget import Widget
-from textual.widgets import Button, DataTable
+from textual.widgets import Button, Static
 
 from rhythm_slicer.playlist import Playlist, Track
 from rhythm_slicer import playlist_builder as scan_builder
 from rhythm_slicer.ui import playlist_builder
 from rhythm_slicer.ui.marquee import Marquee
 from rhythm_slicer.ui.playlist_builder import PlaylistBuilderScreen
+from rhythm_slicer.ui.virtual_playlist_list import VirtualPlaylistList
 
 
 class DummyBrowser(Widget):
@@ -75,6 +76,9 @@ class FakeQueue:
 
     def get_nowait(self):
         return self._queue.get_nowait()
+
+    def get(self, timeout: float | None = None):
+        return self._queue.get(timeout=timeout)
 
 
 class FakeProcess:
@@ -171,6 +175,34 @@ async def _wait_for_scan_state(
     raise AssertionError(f"Scan state active={active} not reached.")
 
 
+async def _wait_for_scan_status_visible(
+    app: BuilderTestApp, pilot, *, visible: bool, timeout: float = 1.0
+) -> None:
+    deadline = time.monotonic() + timeout
+    while time.monotonic() < deadline:
+        status = app.screen.query_one("#builder_scan_status", Static)
+        if status.display == visible:
+            return
+        await pilot.pause(0.01)
+    raise AssertionError(f"Scan status visible={visible} not reached.")
+
+
+def _scan_status_text(screen: PlaylistBuilderScreen) -> str:
+    return getattr(screen, "_scan_status_text", "")
+
+
+async def _wait_for_scan_status_text(
+    app: BuilderTestApp, pilot, needle: str, *, timeout: float = 2.0
+) -> None:
+    deadline = time.monotonic() + timeout
+    while time.monotonic() < deadline:
+        text = _scan_status_text(app.screen)
+        if needle in text:
+            return
+        await pilot.pause(0.01)
+    raise AssertionError(f"Scan status did not include: {needle}")
+
+
 def test_playlist_builder_add_directory_recursively(
     tmp_path: Path, monkeypatch
 ) -> None:
@@ -238,6 +270,61 @@ def test_playlist_builder_hidden_path_confirm_continue(
             )
             names = [track.path.name for track in app.playlist.tracks]
             assert names == ["secret.mp3"]
+
+    asyncio.run(runner())
+
+
+def test_playlist_builder_scan_status_updates_and_clears(
+    tmp_path: Path, monkeypatch
+) -> None:
+    track = tmp_path / "song.mp3"
+    track.write_text("x", encoding="utf-8")
+    monkeypatch.setattr(playlist_builder, "FileBrowserWidget", DummyBrowser)
+    monkeypatch.setattr(
+        PlaylistBuilderScreen,
+        "_get_process_context",
+        lambda self: FakeContext(),
+    )
+    progress_sent = threading.Event()
+
+    def fake_run_collect_audio_files(paths, allow_hidden_roots, out_q) -> None:
+        out_q.put(
+            (
+                "progress",
+                {
+                    "dirs": 2,
+                    "files": 5,
+                    "found": 1,
+                    "path": str(tmp_path),
+                },
+            )
+        )
+        progress_sent.set()
+        time.sleep(0.2)
+        out_q.put(("ok", [str(track)]))
+
+    monkeypatch.setattr(
+        playlist_builder, "run_collect_audio_files", fake_run_collect_audio_files
+    )
+
+    async def runner() -> None:
+        app = BuilderTestApp(tmp_path)
+        async with app.run_test() as pilot:
+            await _wait_for_builder(app, pilot)
+            file_browser = app.screen.query_one("#builder_file_browser", DummyBrowser)
+            file_browser.set_selected_path(tmp_path)
+            add_button = app.screen.query_one("#builder_files_add", Button)
+            app.screen.on_button_pressed(Button.Pressed(add_button))
+            for _ in range(50):
+                if progress_sent.is_set():
+                    break
+                await pilot.pause(0.01)
+            assert progress_sent.is_set()
+            await _wait_for_scan_status_visible(app, pilot, visible=True)
+            await _wait_for_scan_status_text(app, pilot, "Found: 1")
+            await _wait_for_scan_status_text(app, pilot, "Scanned: 5 files / 2 dirs")
+            await _wait_for_playlist_count(app, pilot, 1)
+            await _wait_for_scan_status_visible(app, pilot, visible=False)
 
     asyncio.run(runner())
 
@@ -327,8 +414,10 @@ def test_playlist_builder_scan_cancel_escape_keeps_ui_alive(
             cancel_button = app.screen.query_one("#builder_files_cancel", Button)
             assert cancel_button.disabled is False
             assert cancel_button.label == "Canceling..."
+            await _wait_for_scan_status_visible(app, pilot, visible=True)
             release_cancel.set()
             await _wait_for_scan_state(app, pilot, active=False)
+            await _wait_for_scan_status_visible(app, pilot, visible=False)
             assert app.playlist.tracks == []
 
     asyncio.run(runner())
@@ -359,11 +448,33 @@ def test_playlist_builder_new_scan_ignores_old_results(
     def fake_run_collect_audio_files(paths, allow_hidden_roots, out_q) -> None:
         if paths and Path(paths[0]) == first_dir:
             started_first.set()
+            out_q.put(
+                (
+                    "progress",
+                    {
+                        "dirs": 1,
+                        "files": 2,
+                        "found": 0,
+                        "path": str(first_dir),
+                    },
+                )
+            )
             while not release_first.is_set():
                 time.sleep(0.01)
             out_q.put(("ok", [str(old_track)]))
             return
         started_second.set()
+        out_q.put(
+            (
+                "progress",
+                {
+                    "dirs": 1,
+                    "files": 1,
+                    "found": 1,
+                    "path": str(second_dir),
+                },
+            )
+        )
         out_q.put(("ok", [str(new_track)]))
 
     monkeypatch.setattr(
@@ -390,6 +501,7 @@ def test_playlist_builder_new_scan_ignores_old_results(
                     break
                 await pilot.pause(0.01)
             assert started_second.is_set()
+            await _wait_for_scan_status_visible(app, pilot, visible=True)
             await _wait_for_playlist_count(app, pilot, 1)
             assert [track.path.name for track in app.playlist.tracks] == ["new.mp3"]
             release_first.set()
@@ -445,8 +557,10 @@ def test_playlist_builder_move_up_button_moves_selection(
         app = BuilderTestApp(tmp_path, playlist=playlist)
         async with app.run_test() as pilot:
             await _wait_for_builder(app, pilot)
-            app.screen._playlist_selection = {1}
-            app.screen._refresh_playlist_entries()
+            playlist_list = app.screen.query_one(
+                "#builder_playlist", VirtualPlaylistList
+            )
+            playlist_list.set_checked_indices({1})
             move_up = app.screen.query_one("#builder_playlist_move_up", Button)
             app.screen.on_button_pressed(Button.Pressed(move_up))
             await pilot.pause()
@@ -472,8 +586,10 @@ def test_playlist_builder_move_down_button_moves_selection(
         app = BuilderTestApp(tmp_path, playlist=playlist)
         async with app.run_test() as pilot:
             await _wait_for_builder(app, pilot)
-            app.screen._playlist_selection = {1}
-            app.screen._refresh_playlist_entries()
+            playlist_list = app.screen.query_one(
+                "#builder_playlist", VirtualPlaylistList
+            )
+            playlist_list.set_checked_indices({1})
             move_down = app.screen.query_one("#builder_playlist_move_down", Button)
             app.screen.on_button_pressed(Button.Pressed(move_down))
             await pilot.pause()
@@ -499,16 +615,18 @@ def test_playlist_builder_selection_toggle_preserves_scroll(
         app = BuilderTestApp(tmp_path, playlist=playlist)
         async with app.run_test() as pilot:
             await _wait_for_builder(app, pilot)
-            table = app.screen.query_one("#builder_playlist", DataTable)
-            table.move_cursor(row=40, column=0, scroll=False)
-            table.scroll_to(y=10, animate=False, immediate=True)
+            playlist_list = app.screen.query_one(
+                "#builder_playlist", VirtualPlaylistList
+            )
+            playlist_list.set_cursor_index(40)
+            playlist_list._scroll_by(10)
             await pilot.pause()
-            before_cursor = table.cursor_row
-            before_scroll = table.scroll_y
+            before_cursor = playlist_list.cursor_index
+            before_scroll = playlist_list.scroll_offset
             app.screen._toggle_playlist_selection()
             await pilot.pause()
-            assert table.cursor_row == before_cursor
-            assert table.scroll_y == before_scroll
+            assert playlist_list.cursor_index == before_cursor
+            assert playlist_list.scroll_offset == before_scroll
 
     asyncio.run(runner())
 
@@ -526,10 +644,10 @@ def test_playlist_builder_highlight_updates_details(
         app = BuilderTestApp(tmp_path, playlist=playlist)
         async with app.run_test() as pilot:
             await _wait_for_builder(app, pilot)
-            table = app.screen.query_one("#builder_playlist", DataTable)
-            table.move_cursor(row=1, column=0, scroll=False)
-            event = DataTable.RowHighlighted(table, 1, "1")
-            app.screen.on_data_table_row_highlighted(event)
+            playlist_list = app.screen.query_one(
+                "#builder_playlist", VirtualPlaylistList
+            )
+            playlist_list.set_cursor_index(1)
             await pilot.pause()
             details = app.screen.query_one("#builder_playlist_details", Marquee)
             assert paths[1].name in details.current_text
@@ -551,8 +669,10 @@ def test_playlist_builder_remove_highlighted_fallback(
         app = BuilderTestApp(tmp_path, playlist=playlist)
         async with app.run_test() as pilot:
             await _wait_for_builder(app, pilot)
-            table = app.screen.query_one("#builder_playlist", DataTable)
-            table.move_cursor(row=1, column=0, scroll=False)
+            playlist_list = app.screen.query_one(
+                "#builder_playlist", VirtualPlaylistList
+            )
+            playlist_list.set_cursor_index(1)
             remove_button = app.screen.query_one("#builder_playlist_remove", Button)
             app.screen.on_button_pressed(Button.Pressed(remove_button))
             await pilot.pause()
@@ -560,7 +680,7 @@ def test_playlist_builder_remove_highlighted_fallback(
                 "a.mp3",
                 "c.mp3",
             ]
-            assert table.cursor_row == 1
+            assert playlist_list.cursor_index == 1
 
     asyncio.run(runner())
 
@@ -576,13 +696,15 @@ def test_playlist_builder_remove_selected_rows(tmp_path: Path, monkeypatch) -> N
         app = BuilderTestApp(tmp_path, playlist=playlist)
         async with app.run_test() as pilot:
             await _wait_for_builder(app, pilot)
-            app.screen._playlist_selection = {0, 2}
-            app.screen._refresh_playlist_entries()
+            playlist_list = app.screen.query_one(
+                "#builder_playlist", VirtualPlaylistList
+            )
+            playlist_list.set_checked_indices({0, 2})
             remove_button = app.screen.query_one("#builder_playlist_remove", Button)
             app.screen.on_button_pressed(Button.Pressed(remove_button))
             await pilot.pause()
             assert [track.path.name for track in app.playlist.tracks] == ["b.mp3"]
-            assert app.screen._playlist_selection == set()
+            assert playlist_list.get_checked_indices() == []
 
     asyncio.run(runner())
 
@@ -601,8 +723,10 @@ def test_playlist_builder_remove_playing_advances_to_next(
         app._playing_index = 1
         async with app.run_test() as pilot:
             await _wait_for_builder(app, pilot)
-            app.screen._playlist_selection = {1}
-            app.screen._refresh_playlist_entries()
+            playlist_list = app.screen.query_one(
+                "#builder_playlist", VirtualPlaylistList
+            )
+            playlist_list.set_checked_indices({1})
             remove_button = app.screen.query_one("#builder_playlist_remove", Button)
             app.screen.on_button_pressed(Button.Pressed(remove_button))
             await pilot.pause()
@@ -627,8 +751,10 @@ def test_playlist_builder_remove_playing_last_moves_previous(
         app._playing_index = 2
         async with app.run_test() as pilot:
             await _wait_for_builder(app, pilot)
-            app.screen._playlist_selection = {2}
-            app.screen._refresh_playlist_entries()
+            playlist_list = app.screen.query_one(
+                "#builder_playlist", VirtualPlaylistList
+            )
+            playlist_list.set_checked_indices({2})
             remove_button = app.screen.query_one("#builder_playlist_remove", Button)
             app.screen.on_button_pressed(Button.Pressed(remove_button))
             await pilot.pause()

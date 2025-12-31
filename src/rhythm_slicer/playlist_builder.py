@@ -9,9 +9,9 @@ import sys
 import threading
 import time
 import traceback
+from typing import Callable
 from typing import Iterable, Iterator, Literal, TypeVar
 
-from rhythm_slicer.metadata import format_display_title, get_track_meta
 from rhythm_slicer.playlist import SUPPORTED_EXTENSIONS, Track
 
 FILE_ATTRIBUTE_HIDDEN = 0x2
@@ -114,6 +114,16 @@ class FileBrowserModel:
         return path.parent
 
 
+ProgressCallback = Callable[[int, int, int, Path], None]
+
+
+@dataclass
+class _ScanCounters:
+    dirs: int = 0
+    files: int = 0
+    found: int = 0
+
+
 def collect_audio_files(
     paths: Iterable[Path],
     *,
@@ -122,6 +132,8 @@ def collect_audio_files(
     check_every: int = 100,
     sort_entries: bool = False,
     sort_results: bool = False,
+    progress: ProgressCallback | None = None,
+    progress_every: int = 200,
 ) -> list[Path]:
     """Collect supported audio files from files or folders (recursive)."""
     found: list[Path] = []
@@ -132,6 +144,8 @@ def collect_audio_files(
         else set()
     )
     check_every = max(1, check_every)
+    progress_every = max(1, progress_every)
+    counters = _ScanCounters()
     for path in paths:
         if cancel_event and cancel_event.is_set():
             break
@@ -142,20 +156,25 @@ def collect_audio_files(
             cancel_event=cancel_event,
             check_every=check_every,
             sort_entries=sort_entries,
+            counters=counters,
+            progress=progress,
+            progress_every=progress_every,
         ):
             resolved = _safe_resolve(item)
             if resolved in seen:
                 continue
             seen.add(resolved)
             found.append(item)
+            counters.found += 1
+            if progress:
+                progress(counters.dirs, counters.files, counters.found, item.parent)
     if sort_results:
         found.sort(key=lambda item: str(item).casefold())
     return found
 
 
 def build_track_from_path(path: Path) -> Track:
-    meta = get_track_meta(path)
-    title = format_display_title(path, meta)
+    title = path.name
     return Track(path=path, title=title)
 
 
@@ -239,6 +258,9 @@ def _walk_audio_files(
     cancel_event: threading.Event | None = None,
     check_every: int = 100,
     sort_entries: bool = False,
+    counters: _ScanCounters | None = None,
+    progress: ProgressCallback | None = None,
+    progress_every: int = 200,
 ) -> Iterator[Path]:
     if cancel_event and cancel_event.is_set():
         return
@@ -256,6 +278,8 @@ def _walk_audio_files(
             if not allow_hidden and is_hidden_or_system(root_path):
                 dirs[:] = []
                 continue
+            if counters is not None:
+                counters.dirs += 1
             if dirs_seen % check_every == 0:
                 time.sleep(0)
             if cancel_event and cancel_event.is_set():
@@ -280,8 +304,15 @@ def _walk_audio_files(
                 item = root_path / name
                 if not allow_hidden and is_hidden_or_system(item):
                     continue
+                if counters is not None:
+                    counters.files += 1
+                if progress and counters is not None:
+                    if counters.files % progress_every == 0:
+                        progress(counters.dirs, counters.files, counters.found, root_path)
                 if _is_supported(item):
                     yield item
+            if progress and counters is not None:
+                progress(counters.dirs, counters.files, counters.found, root_path)
         return
     if path.is_file() and _is_supported(path):
         if cancel_event and cancel_event.is_set():
@@ -342,10 +373,32 @@ def run_collect_audio_files(
         allow_hidden = (
             [Path(path) for path in allow_hidden_roots] if allow_hidden_roots else None
         )
+        last_emit = 0.0
+
+        def emit_progress(dirs: int, files: int, found: int, current: Path) -> None:
+            nonlocal last_emit
+            now = time.monotonic()
+            if now - last_emit < 0.2:
+                return
+            last_emit = now
+            out_q.put(
+                (
+                    "progress",
+                    {
+                        "dirs": dirs,
+                        "files": files,
+                        "found": found,
+                        "path": str(current),
+                    },
+                )
+            )
+
         found = collect_audio_files(
             path_objs,
             allow_hidden_roots=allow_hidden,
             sort_results=True,
+            progress=emit_progress,
+            progress_every=200,
         )
         out_q.put(("ok", [str(path) for path in found]))
     except Exception:
