@@ -6,6 +6,9 @@ from dataclasses import dataclass
 import os
 from pathlib import Path
 import sys
+import threading
+import time
+import traceback
 from typing import Iterable, Iterator, Literal, TypeVar
 
 from rhythm_slicer.metadata import format_display_title, get_track_meta
@@ -112,7 +115,13 @@ class FileBrowserModel:
 
 
 def collect_audio_files(
-    paths: Iterable[Path], *, allow_hidden_roots: Iterable[Path] | None = None
+    paths: Iterable[Path],
+    *,
+    allow_hidden_roots: Iterable[Path] | None = None,
+    cancel_event: threading.Event | None = None,
+    check_every: int = 100,
+    sort_entries: bool = False,
+    sort_results: bool = False,
 ) -> list[Path]:
     """Collect supported audio files from files or folders (recursive)."""
     found: list[Path] = []
@@ -122,14 +131,25 @@ def collect_audio_files(
         if allow_hidden_roots
         else set()
     )
+    check_every = max(1, check_every)
     for path in paths:
+        if cancel_event and cancel_event.is_set():
+            break
         allow_hidden = _safe_resolve(path) in allow_hidden_set
-        for item in _walk_audio_files(path, allow_hidden=allow_hidden):
+        for item in _walk_audio_files(
+            path,
+            allow_hidden=allow_hidden,
+            cancel_event=cancel_event,
+            check_every=check_every,
+            sort_entries=sort_entries,
+        ):
             resolved = _safe_resolve(item)
             if resolved in seen:
                 continue
             seen.add(resolved)
             found.append(item)
+    if sort_results:
+        found.sort(key=lambda item: str(item).casefold())
     return found
 
 
@@ -212,22 +232,51 @@ def is_hidden_or_system(path: Path, *, include_parents: bool = False) -> bool:
         current = parent
 
 
-def _walk_audio_files(path: Path, *, allow_hidden: bool = False) -> Iterator[Path]:
+def _walk_audio_files(
+    path: Path,
+    *,
+    allow_hidden: bool = False,
+    cancel_event: threading.Event | None = None,
+    check_every: int = 100,
+    sort_entries: bool = False,
+) -> Iterator[Path]:
+    if cancel_event and cancel_event.is_set():
+        return
     if not allow_hidden and is_hidden_or_system(path):
         return
+    check_every = max(1, check_every)
     if path.is_dir():
+        files_seen = 0
+        dirs_seen = 0
         for root, dirs, files in os.walk(path):
+            dirs_seen += 1
+            if cancel_event and cancel_event.is_set():
+                return
             root_path = Path(root)
             if not allow_hidden and is_hidden_or_system(root_path):
                 dirs[:] = []
                 continue
-            dirs.sort(key=str.casefold)
-            files.sort(key=str.casefold)
+            if dirs_seen % check_every == 0:
+                time.sleep(0)
+            if cancel_event and cancel_event.is_set():
+                return
+            if sort_entries:
+                dirs.sort(key=str.casefold)
+                files.sort(key=str.casefold)
+            if cancel_event and cancel_event.is_set():
+                return
             if not allow_hidden:
                 dirs[:] = [
                     name for name in dirs if not is_hidden_or_system(root_path / name)
                 ]
             for name in files:
+                files_seen += 1
+                if cancel_event and cancel_event.is_set():
+                    return
+                if files_seen % check_every == 0:
+                    time.sleep(0)
+                if cancel_event and cancel_event.is_set():
+                    return
                 item = root_path / name
                 if not allow_hidden and is_hidden_or_system(item):
                     continue
@@ -235,6 +284,8 @@ def _walk_audio_files(path: Path, *, allow_hidden: bool = False) -> Iterator[Pat
                     yield item
         return
     if path.is_file() and _is_supported(path):
+        if cancel_event and cancel_event.is_set():
+            return
         yield path
 
 
@@ -278,3 +329,24 @@ def _windows_file_attributes(path: Path) -> int | None:
     if attrs == INVALID_FILE_ATTRIBUTES:
         return None
     return attrs
+
+
+def run_collect_audio_files(
+    paths: list[str],
+    allow_hidden_roots: list[str],
+    out_q,
+) -> None:
+    """Process worker entrypoint for recursive audio scan."""
+    try:
+        path_objs = [Path(path) for path in paths]
+        allow_hidden = (
+            [Path(path) for path in allow_hidden_roots] if allow_hidden_roots else None
+        )
+        found = collect_audio_files(
+            path_objs,
+            allow_hidden_roots=allow_hidden,
+            sort_results=True,
+        )
+        out_q.put(("ok", [str(path) for path in found]))
+    except Exception:
+        out_q.put(("error", traceback.format_exc()))

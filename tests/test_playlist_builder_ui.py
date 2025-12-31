@@ -3,6 +3,9 @@
 from __future__ import annotations
 
 import asyncio
+import queue
+import threading
+import time
 from pathlib import Path
 
 import pytest
@@ -62,6 +65,65 @@ class BuilderPlaybackApp(BuilderTestApp):
         self._playing_index = None
 
 
+class FakeQueue:
+    def __init__(self) -> None:
+        self._queue: queue.Queue = queue.Queue()
+        self.cancel_event = threading.Event()
+
+    def put(self, item) -> None:
+        self._queue.put(item)
+
+    def get_nowait(self):
+        return self._queue.get_nowait()
+
+
+class FakeProcess:
+    def __init__(self, target, args) -> None:
+        self._target = target
+        self._args = args
+        self._thread: threading.Thread | None = None
+        self._exitcode: int | None = None
+
+    def start(self) -> None:
+        def runner() -> None:
+            try:
+                self._target(*self._args)
+                self._exitcode = 0
+            except Exception:
+                self._exitcode = 1
+
+        self._thread = threading.Thread(target=runner, daemon=True)
+        self._thread.start()
+
+    def terminate(self) -> None:
+        try:
+            out_q = self._args[2]
+        except Exception:
+            return
+        if hasattr(out_q, "cancel_event"):
+            out_q.cancel_event.set()
+        self._exitcode = -15
+
+    def join(self, timeout: float | None = None) -> None:
+        if self._thread:
+            self._thread.join(timeout)
+
+    def is_alive(self) -> bool:
+        return bool(self._thread and self._thread.is_alive())
+
+    @property
+    def exitcode(self) -> int | None:
+        return self._exitcode
+
+
+class FakeContext:
+    def Queue(self) -> FakeQueue:
+        return FakeQueue()
+
+    def Process(self, target, args, daemon: bool = True) -> FakeProcess:
+        return FakeProcess(target, args)
+
+
 @pytest.fixture(autouse=True)
 def _disable_windows_hidden_attrs(monkeypatch) -> None:
     if scan_builder.sys.platform.startswith("win"):
@@ -86,6 +148,29 @@ async def _wait_for_selector(app: BuilderTestApp, pilot, selector: str) -> None:
     raise AssertionError(f"Selector not found: {selector}")
 
 
+async def _wait_for_playlist_count(
+    app: BuilderTestApp, pilot, count: int, *, timeout: float = 3.0
+) -> None:
+    deadline = time.monotonic() + timeout
+    while time.monotonic() < deadline:
+        if len(app.playlist.tracks) == count:
+            return
+        await pilot.pause(0.01)
+    raise AssertionError(f"Playlist did not reach {count} tracks.")
+
+
+async def _wait_for_scan_state(
+    app: BuilderTestApp, pilot, *, active: bool, timeout: float = 1.0
+) -> None:
+    deadline = time.monotonic() + timeout
+    while time.monotonic() < deadline:
+        has_scan = app.screen._active_scan_id is not None
+        if has_scan == active:
+            return
+        await pilot.pause(0.01)
+    raise AssertionError(f"Scan state active={active} not reached.")
+
+
 def test_playlist_builder_add_directory_recursively(
     tmp_path: Path, monkeypatch
 ) -> None:
@@ -96,6 +181,11 @@ def test_playlist_builder_add_directory_recursively(
     (subdir / "inner.wav").write_text("x", encoding="utf-8")
 
     monkeypatch.setattr(playlist_builder, "FileBrowserWidget", DummyBrowser)
+    monkeypatch.setattr(
+        PlaylistBuilderScreen,
+        "_get_process_context",
+        lambda self: FakeContext(),
+    )
 
     async def runner() -> None:
         app = BuilderTestApp(tmp_path)
@@ -105,7 +195,7 @@ def test_playlist_builder_add_directory_recursively(
             file_browser.set_selected_path(tmp_path)
             add_button = app.screen.query_one("#builder_files_add", Button)
             app.screen.on_button_pressed(Button.Pressed(add_button))
-            await pilot.pause()
+            await _wait_for_playlist_count(app, pilot, 2)
             names = sorted(track.path.name for track in app.playlist.tracks)
             assert names == ["inner.wav", "outer.mp3"]
 
@@ -120,6 +210,11 @@ def test_playlist_builder_hidden_path_confirm_continue(
     (hidden / "secret.mp3").write_text("x", encoding="utf-8")
 
     monkeypatch.setattr(playlist_builder, "FileBrowserWidget", DummyBrowser)
+    monkeypatch.setattr(
+        PlaylistBuilderScreen,
+        "_get_process_context",
+        lambda self: FakeContext(),
+    )
 
     async def runner() -> None:
         app = BuilderTestApp(tmp_path)
@@ -137,7 +232,7 @@ def test_playlist_builder_hidden_path_confirm_continue(
             file_browser = app.screen.query_one("#builder_file_browser", DummyBrowser)
             file_browser.set_selected_path(hidden)
             app.screen.query_one("#builder_files_add", Button).press()
-            await pilot.pause()
+            await _wait_for_playlist_count(app, pilot, 1)
             assert isinstance(
                 captured.get("screen"), playlist_builder.HiddenPathConfirm
             )
@@ -155,6 +250,11 @@ def test_playlist_builder_hidden_path_confirm_cancel(
     (hidden / "secret.mp3").write_text("x", encoding="utf-8")
 
     monkeypatch.setattr(playlist_builder, "FileBrowserWidget", DummyBrowser)
+    monkeypatch.setattr(
+        PlaylistBuilderScreen,
+        "_get_process_context",
+        lambda self: FakeContext(),
+    )
 
     async def runner() -> None:
         app = BuilderTestApp(tmp_path)
@@ -177,6 +277,124 @@ def test_playlist_builder_hidden_path_confirm_cancel(
                 captured.get("screen"), playlist_builder.HiddenPathConfirm
             )
             assert app.playlist.tracks == []
+
+    asyncio.run(runner())
+
+
+def test_playlist_builder_scan_cancel_escape_keeps_ui_alive(
+    tmp_path: Path, monkeypatch
+) -> None:
+    track = tmp_path / "song.mp3"
+    track.write_text("x", encoding="utf-8")
+    monkeypatch.setattr(playlist_builder, "FileBrowserWidget", DummyBrowser)
+    monkeypatch.setattr(
+        PlaylistBuilderScreen,
+        "_get_process_context",
+        lambda self: FakeContext(),
+    )
+    started = threading.Event()
+    release_cancel = threading.Event()
+
+    def fake_run_collect_audio_files(paths, allow_hidden_roots, out_q) -> None:
+        started.set()
+        while not out_q.cancel_event.is_set():
+            time.sleep(0.01)
+        release_cancel.wait()
+        out_q.put(("ok", [str(track)]))
+
+    monkeypatch.setattr(
+        playlist_builder, "run_collect_audio_files", fake_run_collect_audio_files
+    )
+
+    async def runner() -> None:
+        app = BuilderTestApp(tmp_path)
+        async with app.run_test() as pilot:
+            await _wait_for_builder(app, pilot)
+            file_browser = app.screen.query_one("#builder_file_browser", DummyBrowser)
+            file_browser.set_selected_path(tmp_path)
+            add_button = app.screen.query_one("#builder_files_add", Button)
+            app.screen.on_button_pressed(Button.Pressed(add_button))
+            for _ in range(50):
+                if started.is_set():
+                    break
+                await pilot.pause(0.01)
+            assert started.is_set()
+            app.screen.on_key(events.Key("escape", None))
+            await pilot.pause()
+            assert isinstance(app.screen, PlaylistBuilderScreen)
+            assert app.screen._active_scan_id is not None
+            assert app.playlist.tracks == []
+            cancel_button = app.screen.query_one("#builder_files_cancel", Button)
+            assert cancel_button.disabled is False
+            assert cancel_button.label == "Canceling..."
+            release_cancel.set()
+            await _wait_for_scan_state(app, pilot, active=False)
+            assert app.playlist.tracks == []
+
+    asyncio.run(runner())
+
+
+def test_playlist_builder_new_scan_ignores_old_results(
+    tmp_path: Path, monkeypatch
+) -> None:
+    first_dir = tmp_path / "first"
+    second_dir = tmp_path / "second"
+    first_dir.mkdir()
+    second_dir.mkdir()
+    old_track = first_dir / "old.mp3"
+    new_track = second_dir / "new.mp3"
+    old_track.write_text("x", encoding="utf-8")
+    new_track.write_text("x", encoding="utf-8")
+
+    monkeypatch.setattr(playlist_builder, "FileBrowserWidget", DummyBrowser)
+    monkeypatch.setattr(
+        PlaylistBuilderScreen,
+        "_get_process_context",
+        lambda self: FakeContext(),
+    )
+    started_first = threading.Event()
+    started_second = threading.Event()
+    release_first = threading.Event()
+
+    def fake_run_collect_audio_files(paths, allow_hidden_roots, out_q) -> None:
+        if paths and Path(paths[0]) == first_dir:
+            started_first.set()
+            while not release_first.is_set():
+                time.sleep(0.01)
+            out_q.put(("ok", [str(old_track)]))
+            return
+        started_second.set()
+        out_q.put(("ok", [str(new_track)]))
+
+    monkeypatch.setattr(
+        playlist_builder, "run_collect_audio_files", fake_run_collect_audio_files
+    )
+
+    async def runner() -> None:
+        app = BuilderTestApp(tmp_path)
+        async with app.run_test() as pilot:
+            await _wait_for_builder(app, pilot)
+            file_browser = app.screen.query_one("#builder_file_browser", DummyBrowser)
+            file_browser.set_selected_path(first_dir)
+            add_button = app.screen.query_one("#builder_files_add", Button)
+            app.screen.on_button_pressed(Button.Pressed(add_button))
+            for _ in range(50):
+                if started_first.is_set():
+                    break
+                await pilot.pause(0.01)
+            assert started_first.is_set()
+            file_browser.set_selected_path(second_dir)
+            app.screen.on_button_pressed(Button.Pressed(add_button))
+            for _ in range(50):
+                if started_second.is_set():
+                    break
+                await pilot.pause(0.01)
+            assert started_second.is_set()
+            await _wait_for_playlist_count(app, pilot, 1)
+            assert [track.path.name for track in app.playlist.tracks] == ["new.mp3"]
+            release_first.set()
+            await pilot.pause(0.05)
+            assert [track.path.name for track in app.playlist.tracks] == ["new.mp3"]
 
     asyncio.run(runner())
 

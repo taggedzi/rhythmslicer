@@ -2,14 +2,21 @@
 
 from __future__ import annotations
 
+from dataclasses import dataclass
+import multiprocessing
+from multiprocessing.context import SpawnContext
+from multiprocessing.process import BaseProcess
+from multiprocessing.queues import Queue as MPQueue
 from pathlib import Path
-from typing import Optional
+import queue
+from typing import Callable, Optional
 
 from rich.text import Text
 from textual import events
 from textual.app import ComposeResult
 from textual.containers import Container, Horizontal, Vertical
 from textual.screen import ModalScreen, Screen
+from textual.timer import Timer
 from textual.widget import Widget
 from textual.widgets import Button, DataTable, Static
 
@@ -17,13 +24,22 @@ from rhythm_slicer.metadata import get_track_meta
 from rhythm_slicer.playlist import Playlist, Track
 from rhythm_slicer.playlist_builder import (
     build_track_from_path,
-    collect_audio_files,
     is_hidden_or_system,
     reorder_items,
+    run_collect_audio_files,
 )
 from rhythm_slicer.playlist_io import save_m3u8
 from rhythm_slicer.ui.file_browser import FileBrowserWidget
 from rhythm_slicer.ui.marquee import Marquee
+
+
+@dataclass
+class _ScanState:
+    scan_id: int
+    process: BaseProcess
+    queue: MPQueue
+    poller: Timer
+    cancel_requested: bool = False
 
 
 class PlaylistBuilderScreen(Screen):
@@ -35,6 +51,9 @@ class PlaylistBuilderScreen(Screen):
         self._file_browser: Optional[FileBrowserWidget] = None
         self._playlist_table: Optional[DataTable] = None
         self._playlist_selection: set[int] = set()
+        self._scan_states: dict[int, _ScanState] = {}
+        self._active_scan_id: int | None = None
+        self._scan_id_counter = 0
 
     def compose(self) -> ComposeResult:
         with Container(id="builder_root"):
@@ -45,6 +64,7 @@ class PlaylistBuilderScreen(Screen):
                         FileBrowserWidget(self._start_path, id="builder_file_browser"),
                         Horizontal(
                             Button("Add", id="builder_files_add"),
+                            Button("Cancel", id="builder_files_cancel", disabled=True),
                             id="builder_files_actions",
                         ),
                         id="builder_left_stack",
@@ -96,7 +116,10 @@ class PlaylistBuilderScreen(Screen):
                 if is_hidden_or_system(selected, include_parents=True):
                     self._confirm_hidden_add([selected])
                 else:
-                    self._add_paths_to_playlist([selected])
+                    self._start_add_scan([selected])
+            return
+        if button_id == "builder_files_cancel":
+            self._cancel_active_scan()
             return
         if button_id == "builder_playlist_select_all":
             playlist = self._ensure_playlist()
@@ -138,7 +161,10 @@ class PlaylistBuilderScreen(Screen):
             event.stop()
             return
         if key == "escape":
-            self.app.pop_screen()
+            if self._active_scan_id is not None:
+                self._cancel_active_scan()
+            else:
+                self.app.pop_screen()
             event.stop()
             return
         focused = getattr(self, "focused", None)
@@ -497,13 +523,11 @@ class PlaylistBuilderScreen(Screen):
             setattr(self.app, "playlist", playlist)
         return playlist
 
-    def _add_paths_to_playlist(
-        self, paths: list[Path], *, allow_hidden_roots: list[Path] | None = None
-    ) -> None:
+    def _add_paths_to_playlist(self, paths: list[Path]) -> None:
         playlist = self._ensure_playlist()
         existing = {self._resolve_path(track.path) for track in playlist.tracks}
         new_paths = []
-        for path in collect_audio_files(paths, allow_hidden_roots=allow_hidden_roots):
+        for path in paths:
             resolved = self._resolve_path(path)
             if resolved in existing:
                 continue
@@ -518,6 +542,135 @@ class PlaylistBuilderScreen(Screen):
         self._refresh_playlist_after_edit()
         self._refresh_playlist_entries()
 
+    def _start_add_scan(
+        self, paths: list[Path], *, allow_hidden_roots: list[Path] | None = None
+    ) -> None:
+        if not paths:
+            return
+        if self._active_scan_id is not None:
+            self._cancel_active_scan()
+        self._scan_id_counter += 1
+        scan_id = self._scan_id_counter
+        ctx = self._get_process_context()
+        queue_handle: MPQueue = ctx.Queue()
+        process: BaseProcess = ctx.Process(
+            target=self._get_scan_worker_entrypoint(),
+            args=(
+                [str(path) for path in paths],
+                [str(path) for path in allow_hidden_roots]
+                if allow_hidden_roots
+                else [],
+                queue_handle,
+            ),
+            daemon=True,
+        )
+        poller: Timer = self.set_interval(
+            0.1,
+            lambda: self._poll_scan_queue(scan_id),
+        )
+        self._scan_states[scan_id] = _ScanState(
+            scan_id=scan_id,
+            process=process,
+            queue=queue_handle,
+            poller=poller,
+        )
+        self._active_scan_id = scan_id
+        self._refresh_scan_controls()
+        process.start()
+
+    def _cancel_active_scan(self) -> None:
+        active = self._active_scan_id
+        if active is None:
+            return
+        state = self._scan_states.get(active)
+        if not state or state.cancel_requested:
+            return
+        state.cancel_requested = True
+        try:
+            state.process.terminate()
+        except Exception:
+            pass
+        self._refresh_scan_controls()
+
+    def _poll_scan_queue(self, scan_id: int) -> None:
+        state = self._scan_states.get(scan_id)
+        if not state:
+            return
+        try:
+            status, payload = state.queue.get_nowait()
+        except queue.Empty:
+            status = None
+            payload = None
+        if status is not None:
+            self._handle_scan_result(scan_id, status, payload)
+            return
+        if not state.process.is_alive():
+            state.process.join(timeout=0)
+            if state.cancel_requested:
+                self._handle_scan_result(scan_id, "canceled", None)
+            else:
+                self._handle_scan_result(
+                    scan_id,
+                    "error",
+                    "Scan process ended unexpectedly.",
+                )
+
+    def _handle_scan_result(
+        self,
+        scan_id: int,
+        status: str,
+        payload: list[str] | str | None,
+    ) -> None:
+        state = self._scan_states.pop(scan_id, None)
+        if not state:
+            return
+        try:
+            state.poller.stop()
+        except Exception:
+            pass
+        was_active = self._active_scan_id == scan_id
+        if was_active:
+            self._active_scan_id = None
+            self._refresh_scan_controls()
+        if status != "ok":
+            if status == "error" and hasattr(self.app, "_set_message"):
+                self.app._set_message(str(payload))
+            return
+        if state.cancel_requested:
+            return
+        if not was_active:
+            return
+        if not isinstance(payload, list):
+            return
+        paths = [Path(item) for item in payload]
+        if not paths:
+            return
+        self._add_paths_to_playlist(paths)
+
+    def _refresh_scan_controls(self) -> None:
+        try:
+            cancel_button = self.query_one("#builder_files_cancel", Button)
+        except Exception:
+            return
+        active = self._active_scan_id
+        if active is None:
+            cancel_button.disabled = True
+            cancel_button.label = "Cancel"
+            return
+        state = self._scan_states.get(active)
+        cancel_button.disabled = False
+        cancel_button.label = (
+            "Canceling..." if state and state.cancel_requested else "Cancel"
+        )
+
+    def _get_process_context(self) -> SpawnContext:
+        return multiprocessing.get_context("spawn")
+
+    def _get_scan_worker_entrypoint(
+        self,
+    ) -> Callable[[list[str], list[str], MPQueue], None]:
+        return run_collect_audio_files
+
     def _confirm_hidden_add(self, paths: list[Path]) -> None:
         if not paths:
             return
@@ -531,7 +684,23 @@ class PlaylistBuilderScreen(Screen):
 
     def _handle_hidden_confirm(self, result: bool | None, paths: list[Path]) -> None:
         if result:
-            self._add_paths_to_playlist(paths, allow_hidden_roots=paths)
+            self._start_add_scan(paths, allow_hidden_roots=paths)
+
+    def on_unmount(self) -> None:
+        for scan_id in list(self._scan_states.keys()):
+            state = self._scan_states.pop(scan_id, None)
+            if not state:
+                continue
+            try:
+                state.process.terminate()
+            except Exception:
+                pass
+            try:
+                state.poller.stop()
+            except Exception:
+                pass
+        self._active_scan_id = None
+        self._refresh_scan_controls()
 
     def on_data_table_row_selected(self, event: DataTable.RowSelected) -> None:
         if event.data_table is not self._playlist_table:
