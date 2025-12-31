@@ -575,15 +575,15 @@ DrivePrompt {
     width: 50%;
     max-width: 60;
     min-width: 32;
-    height: 12;
+    height: 13;
     padding: 1 2;
-    border: round $cyan;
-    background: $panelA;
+    border: round $accent;
+    background: $panel;
 }
 
 #drive_prompt_title {
     width: 100%;
-    content-align: center middle;
+    content-align: left middle;
     margin-bottom: 1;
 }
 
@@ -596,18 +596,7 @@ DrivePrompt {
     width: 100%;
     height: 3;
     align: right middle;
-}
-
-#drive_prompt_ok,
-#drive_prompt_cancel {
-    height: 3;
-    min-width: 10;
-    padding: 0 2;
-    content-align: center middle;
-    border: heavy $cyan;
-    color: $text;
-    background: $panelA;
-    margin-left: 1;
+    margin-top: 1;
 }
 
 #builder_root {
