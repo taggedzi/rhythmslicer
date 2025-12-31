@@ -67,6 +67,7 @@ class PlaylistBuilderScreen(Screen):
                                 "Select All",
                                 id="builder_playlist_select_all",
                             ),
+                            Button("Remove", id="builder_playlist_remove"),
                             Button("Clear", id="builder_playlist_clear"),
                             Static("", id="builder_playlist_actions_spacer"),
                             Button("↑", id="builder_playlist_move_up"),
@@ -98,6 +99,9 @@ class PlaylistBuilderScreen(Screen):
             self._playlist_selection = set(range(len(playlist.tracks)))
             self._refresh_playlist_entries()
             return
+        if button_id == "builder_playlist_remove":
+            self.action_remove_from_playlist()
+            return
         if button_id == "builder_playlist_clear":
             self._playlist_selection.clear()
             self._refresh_playlist_entries()
@@ -120,6 +124,12 @@ class PlaylistBuilderScreen(Screen):
 
     def on_key(self, event: events.Key) -> None:
         key = event.key
+        if key == "enter":
+            focused = self.app.focused
+            if isinstance(focused, Button):
+                focused.press()
+                event.stop()
+                return
         if key in {"pageup", "pagedown"}:
             event.stop()
             return
@@ -138,7 +148,7 @@ class PlaylistBuilderScreen(Screen):
             event.stop()
             return
         if key == "d":
-            self._remove_selected_tracks()
+            self.action_remove_from_playlist()
             event.stop()
             return
         if key == "u":
@@ -170,6 +180,7 @@ class PlaylistBuilderScreen(Screen):
             "builder_playlist_load",
             "builder_done",
             "builder_playlist_select_all",
+            "builder_playlist_remove",
             "builder_playlist_clear",
             "builder_playlist_move_up",
             "builder_playlist_move_down",
@@ -293,22 +304,95 @@ class PlaylistBuilderScreen(Screen):
         playlist = self._ensure_playlist()
         if playlist.is_empty():
             return
-        if not self._playlist_selection:
-            return
         tracks = getattr(playlist, "tracks", None)
         if not isinstance(tracks, list):
             raise RuntimeError(
                 "PlaylistBuilderScreen expected playlist.tracks to be a list."
             )
-        playing_path = self._current_playing_path()
-        for index in sorted(self._playlist_selection, reverse=True):
-            if 0 <= index < len(tracks):
-                tracks.pop(index)
+        selected_indices = self._selected_or_focused_indices()
+        valid_indices = {
+            index for index in selected_indices if 0 <= index < len(tracks)
+        }
+        if not valid_indices:
+            return
+        cursor_index = self._focused_playlist_index() or 0
+        playing_index = self._valid_playing_index(len(tracks))
+        original_count = len(tracks)
+        removed_indices = sorted(valid_indices, reverse=True)
+        removed_set = set(removed_indices)
+        for index in removed_indices:
+            playlist.remove(index)
         self._playlist_selection.clear()
-        self._reconcile_playing_index(playing_path)
+        self._reconcile_playing_index_after_remove(
+            playing_index,
+            removed_set,
+            original_count,
+        )
         playlist.clamp_index()
         self._refresh_playlist_after_edit()
         self._refresh_playlist_entries()
+        self._restore_playlist_cursor(cursor_index)
+
+    def action_remove_from_playlist(self) -> None:
+        self._remove_selected_tracks()
+
+    def _selected_or_focused_indices(self) -> set[int]:
+        if self._playlist_selection:
+            return set(self._playlist_selection)
+        focused = self._focused_playlist_index()
+        if focused is None:
+            return set()
+        return {focused}
+
+    def _valid_playing_index(self, track_count: int) -> Optional[int]:
+        playing_index = getattr(self.app, "_playing_index", None)
+        if playing_index is None:
+            return None
+        if 0 <= playing_index < track_count:
+            return playing_index
+        return None
+
+    def _reconcile_playing_index_after_remove(
+        self,
+        playing_index: Optional[int],
+        removed_indices: set[int],
+        original_count: int,
+    ) -> None:
+        if playing_index is None:
+            return
+        if playing_index not in removed_indices:
+            shift = sum(1 for index in removed_indices if index < playing_index)
+            setattr(self.app, "_playing_index", playing_index - shift)
+            return
+        remaining = original_count - len(removed_indices)
+        if remaining <= 0:
+            self._stop_playback_for_empty_playlist()
+            return
+        candidate = playing_index
+        if candidate >= remaining:
+            candidate = remaining - 1
+        setattr(self.app, "_playing_index", candidate)
+
+    def _stop_playback_for_empty_playlist(self) -> None:
+        stop_action = getattr(self.app, "action_stop", None)
+        if callable(stop_action):
+            stop_action()
+            return
+        player = getattr(self.app, "player", None)
+        if player is not None and hasattr(player, "stop"):
+            player.stop()
+        if hasattr(self.app, "_stop_hackscript"):
+            self.app._stop_hackscript()
+        setattr(self.app, "_playing_index", None)
+
+    def _restore_playlist_cursor(self, preferred_index: int) -> None:
+        if not self._playlist_table:
+            return
+        if self._playlist_table.row_count == 0:
+            return
+        target = max(0, min(preferred_index, self._playlist_table.row_count - 1))
+        self._playlist_table.move_cursor(row=target, column=0, scroll=False)
+        self._update_playlist_details(target)
 
     def _move_selected_tracks(self, direction: str) -> None:
         playlist = self._ensure_playlist()

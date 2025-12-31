@@ -16,6 +16,7 @@ from textual.widgets import Button, DirectoryTree, Label, ListItem, ListView, St
 from rhythm_slicer.playlist_builder import list_drives
 from rhythm_slicer.ui.drive_prompt import DrivePrompt
 
+
 def _supports_show_files() -> bool:
     try:
         return "show_files" in inspect.signature(DirectoryTree).parameters

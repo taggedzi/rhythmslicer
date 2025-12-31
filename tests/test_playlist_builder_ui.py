@@ -41,6 +41,25 @@ class BuilderTestApp(App):
         self.call_later(self.push_screen, PlaylistBuilderScreen(self._start_path))
 
 
+class DummyPlayer:
+    def __init__(self) -> None:
+        self.stop_calls = 0
+
+    def stop(self) -> None:
+        self.stop_calls += 1
+
+
+class BuilderPlaybackApp(BuilderTestApp):
+    def __init__(self, start_path: Path, playlist: Playlist | None = None) -> None:
+        super().__init__(start_path, playlist=playlist)
+        self.player = DummyPlayer()
+        self._playing_index: int | None = None
+
+    def action_stop(self) -> None:
+        self.player.stop()
+        self._playing_index = None
+
+
 async def _wait_for_builder(app: BuilderTestApp, pilot) -> None:
     for _ in range(50):
         if isinstance(app.screen, PlaylistBuilderScreen):
@@ -210,5 +229,127 @@ def test_playlist_builder_highlight_updates_details(
             details = app.screen.query_one("#builder_playlist_details", Marquee)
             assert paths[1].name in details.current_text
             assert str(paths[1]) in details.full_text
+
+    asyncio.run(runner())
+
+
+def test_playlist_builder_remove_highlighted_fallback(
+    tmp_path: Path, monkeypatch
+) -> None:
+    monkeypatch.setattr(playlist_builder, "FileBrowserWidget", DummyBrowser)
+    paths = [tmp_path / name for name in ("a.mp3", "b.mp3", "c.mp3")]
+    for path in paths:
+        path.write_text("x", encoding="utf-8")
+    playlist = Playlist([_build_track(path) for path in paths])
+
+    async def runner() -> None:
+        app = BuilderTestApp(tmp_path, playlist=playlist)
+        async with app.run_test() as pilot:
+            await _wait_for_builder(app, pilot)
+            table = app.screen.query_one("#builder_playlist", DataTable)
+            table.move_cursor(row=1, column=0, scroll=False)
+            remove_button = app.screen.query_one("#builder_playlist_remove", Button)
+            app.screen.on_button_pressed(Button.Pressed(remove_button))
+            await pilot.pause()
+            assert [track.path.name for track in app.playlist.tracks] == [
+                "a.mp3",
+                "c.mp3",
+            ]
+            assert table.cursor_row == 1
+
+    asyncio.run(runner())
+
+
+def test_playlist_builder_remove_selected_rows(tmp_path: Path, monkeypatch) -> None:
+    monkeypatch.setattr(playlist_builder, "FileBrowserWidget", DummyBrowser)
+    paths = [tmp_path / name for name in ("a.mp3", "b.mp3", "c.mp3")]
+    for path in paths:
+        path.write_text("x", encoding="utf-8")
+    playlist = Playlist([_build_track(path) for path in paths])
+
+    async def runner() -> None:
+        app = BuilderTestApp(tmp_path, playlist=playlist)
+        async with app.run_test() as pilot:
+            await _wait_for_builder(app, pilot)
+            app.screen._playlist_selection = {0, 2}
+            app.screen._refresh_playlist_entries()
+            remove_button = app.screen.query_one("#builder_playlist_remove", Button)
+            app.screen.on_button_pressed(Button.Pressed(remove_button))
+            await pilot.pause()
+            assert [track.path.name for track in app.playlist.tracks] == ["b.mp3"]
+            assert app.screen._playlist_selection == set()
+
+    asyncio.run(runner())
+
+
+def test_playlist_builder_remove_playing_advances_to_next(
+    tmp_path: Path, monkeypatch
+) -> None:
+    monkeypatch.setattr(playlist_builder, "FileBrowserWidget", DummyBrowser)
+    paths = [tmp_path / name for name in ("a.mp3", "b.mp3", "c.mp3")]
+    for path in paths:
+        path.write_text("x", encoding="utf-8")
+    playlist = Playlist([_build_track(path) for path in paths])
+
+    async def runner() -> None:
+        app = BuilderPlaybackApp(tmp_path, playlist=playlist)
+        app._playing_index = 1
+        async with app.run_test() as pilot:
+            await _wait_for_builder(app, pilot)
+            app.screen._playlist_selection = {1}
+            app.screen._refresh_playlist_entries()
+            remove_button = app.screen.query_one("#builder_playlist_remove", Button)
+            app.screen.on_button_pressed(Button.Pressed(remove_button))
+            await pilot.pause()
+            assert app._playing_index == 1
+            assert app.playlist.tracks[1].path.name == "c.mp3"
+            assert app.player.stop_calls == 0
+
+    asyncio.run(runner())
+
+
+def test_playlist_builder_remove_playing_last_moves_previous(
+    tmp_path: Path, monkeypatch
+) -> None:
+    monkeypatch.setattr(playlist_builder, "FileBrowserWidget", DummyBrowser)
+    paths = [tmp_path / name for name in ("a.mp3", "b.mp3", "c.mp3")]
+    for path in paths:
+        path.write_text("x", encoding="utf-8")
+    playlist = Playlist([_build_track(path) for path in paths])
+
+    async def runner() -> None:
+        app = BuilderPlaybackApp(tmp_path, playlist=playlist)
+        app._playing_index = 2
+        async with app.run_test() as pilot:
+            await _wait_for_builder(app, pilot)
+            app.screen._playlist_selection = {2}
+            app.screen._refresh_playlist_entries()
+            remove_button = app.screen.query_one("#builder_playlist_remove", Button)
+            app.screen.on_button_pressed(Button.Pressed(remove_button))
+            await pilot.pause()
+            assert app._playing_index == 1
+            assert app.playlist.tracks[1].path.name == "b.mp3"
+            assert app.player.stop_calls == 0
+
+    asyncio.run(runner())
+
+
+def test_playlist_builder_remove_last_track_stops(tmp_path: Path, monkeypatch) -> None:
+    monkeypatch.setattr(playlist_builder, "FileBrowserWidget", DummyBrowser)
+    path = tmp_path / "a.mp3"
+    path.write_text("x", encoding="utf-8")
+    playlist = Playlist([_build_track(path)])
+
+    async def runner() -> None:
+        app = BuilderPlaybackApp(tmp_path, playlist=playlist)
+        app._playing_index = 0
+        async with app.run_test() as pilot:
+            await _wait_for_builder(app, pilot)
+            remove_button = app.screen.query_one("#builder_playlist_remove", Button)
+            app.screen.on_button_pressed(Button.Pressed(remove_button))
+            await pilot.pause()
+            assert app.playlist.is_empty()
+            assert app._playing_index is None
+            assert app.player.stop_calls == 1
 
     asyncio.run(runner())

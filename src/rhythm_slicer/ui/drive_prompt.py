@@ -42,9 +42,10 @@ class DrivePrompt(ModalScreen[Optional[Path]]):
         self._selected = Path(str(event.value))
 
     def _confirm(self) -> None:
-        if self._selected is None:
+        select = self.query_one("#drive_prompt_select", Select)
+        if select.value is Select.BLANK:
             return
-        self.dismiss(self._selected)
+        self.dismiss(Path(str(select.value)))
 
     def on_button_pressed(self, event: Button.Pressed) -> None:
         if event.button.id == "drive_prompt_ok":
@@ -55,6 +56,10 @@ class DrivePrompt(ModalScreen[Optional[Path]]):
     def on_key(self, event: events.Key) -> None:
         if event.key == "escape":
             self.dismiss(None)
+            event.stop()
             return
         if event.key == "enter":
-            self._confirm()
+            focused = self.app.focused
+            if isinstance(focused, Button):
+                focused.press()
+                event.stop()

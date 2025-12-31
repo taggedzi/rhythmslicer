@@ -1260,7 +1260,6 @@ class RhythmSlicerApp(App):
         self._update_playlist_view()
         self._save_config()
 
-
     async def action_select_visualization(self) -> None:
         self.run_worker(self._select_visualization_flow(), exclusive=True)
 
@@ -1328,7 +1327,6 @@ class RhythmSlicerApp(App):
         self._apply_layout_constraints()
         self._update_status_panel(force=True)
         logger.info("TUI mounted")
-
 
     def on_shutdown(self) -> None:
         logger.info("TUI shutdown")
