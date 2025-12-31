@@ -9,7 +9,7 @@ from rich.text import Text
 from textual import events
 from textual.app import ComposeResult
 from textual.containers import Container, Horizontal, Vertical
-from textual.screen import Screen
+from textual.screen import ModalScreen, Screen
 from textual.widget import Widget
 from textual.widgets import Button, DataTable, Static
 
@@ -18,6 +18,7 @@ from rhythm_slicer.playlist import Playlist, Track
 from rhythm_slicer.playlist_builder import (
     build_track_from_path,
     collect_audio_files,
+    is_hidden_or_system,
     reorder_items,
 )
 from rhythm_slicer.playlist_io import save_m3u8
@@ -92,7 +93,10 @@ class PlaylistBuilderScreen(Screen):
                 return
             selected = self._file_browser.selected_path
             if selected:
-                self._add_paths_to_playlist([selected])
+                if is_hidden_or_system(selected, include_parents=True):
+                    self._confirm_hidden_add([selected])
+                else:
+                    self._add_paths_to_playlist([selected])
             return
         if button_id == "builder_playlist_select_all":
             playlist = self._ensure_playlist()
@@ -493,11 +497,13 @@ class PlaylistBuilderScreen(Screen):
             setattr(self.app, "playlist", playlist)
         return playlist
 
-    def _add_paths_to_playlist(self, paths: list[Path]) -> None:
+    def _add_paths_to_playlist(
+        self, paths: list[Path], *, allow_hidden_roots: list[Path] | None = None
+    ) -> None:
         playlist = self._ensure_playlist()
         existing = {self._resolve_path(track.path) for track in playlist.tracks}
         new_paths = []
-        for path in collect_audio_files(paths):
+        for path in collect_audio_files(paths, allow_hidden_roots=allow_hidden_roots):
             resolved = self._resolve_path(path)
             if resolved in existing:
                 continue
@@ -511,6 +517,21 @@ class PlaylistBuilderScreen(Screen):
             playlist.index = 0
         self._refresh_playlist_after_edit()
         self._refresh_playlist_entries()
+
+    def _confirm_hidden_add(self, paths: list[Path]) -> None:
+        if not paths:
+            return
+        selection = paths[0]
+        if not hasattr(self.app, "push_screen"):
+            return
+        self.app.push_screen(
+            HiddenPathConfirm(selection),
+            callback=lambda result: self._handle_hidden_confirm(result, paths),
+        )
+
+    def _handle_hidden_confirm(self, result: bool | None, paths: list[Path]) -> None:
+        if result:
+            self._add_paths_to_playlist(paths, allow_hidden_roots=paths)
 
     def on_data_table_row_selected(self, event: DataTable.RowSelected) -> None:
         if event.data_table is not self._playlist_table:
@@ -552,3 +573,44 @@ def _panel_wrapper(title: str, child: Widget, *, panel_id: str) -> Container:
     panel = Container(child, id=panel_id)
     panel.border_title = title
     return panel
+
+
+class HiddenPathConfirm(ModalScreen[bool]):
+    """Confirm scan of an explicitly selected hidden/system path."""
+
+    def __init__(self, path: Path) -> None:
+        super().__init__()
+        self._path = path
+
+    def compose(self) -> ComposeResult:
+        message = (
+            "This location is hidden or system and is normally skipped during scans.\n"
+            "It will be scanned because you selected it directly."
+        )
+        with Container(id="playlist_prompt"):
+            yield Static("Hidden/System Path", id="prompt_title")
+            yield Static(message, id="prompt_hint")
+            yield Static(str(self._path), id="hidden_path_value")
+            with Horizontal(id="prompt_buttons"):
+                yield Button("Continue", id="hidden_path_continue")
+                yield Button("Cancel", id="hidden_path_cancel")
+
+    def on_mount(self) -> None:
+        self.query_one("#hidden_path_continue", Button).focus()
+
+    def on_button_pressed(self, event: Button.Pressed) -> None:
+        if event.button.id == "hidden_path_continue":
+            self.dismiss(True)
+            return
+        self.dismiss(False)
+
+    def on_key(self, event: events.Key) -> None:
+        if event.key == "escape":
+            self.dismiss(False)
+            event.stop()
+            return
+        if event.key == "enter":
+            focused = self.app.focused
+            if isinstance(focused, Button):
+                focused.press()
+                event.stop()

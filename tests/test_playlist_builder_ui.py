@@ -5,12 +5,14 @@ from __future__ import annotations
 import asyncio
 from pathlib import Path
 
+import pytest
 from textual.app import App
 from textual import events
 from textual.widget import Widget
 from textual.widgets import Button, DataTable
 
 from rhythm_slicer.playlist import Playlist, Track
+from rhythm_slicer import playlist_builder as scan_builder
 from rhythm_slicer.ui import playlist_builder
 from rhythm_slicer.ui.marquee import Marquee
 from rhythm_slicer.ui.playlist_builder import PlaylistBuilderScreen
@@ -60,12 +62,28 @@ class BuilderPlaybackApp(BuilderTestApp):
         self._playing_index = None
 
 
+@pytest.fixture(autouse=True)
+def _disable_windows_hidden_attrs(monkeypatch) -> None:
+    if scan_builder.sys.platform.startswith("win"):
+        monkeypatch.setattr(scan_builder, "_windows_file_attributes", lambda _: 0)
+
+
 async def _wait_for_builder(app: BuilderTestApp, pilot) -> None:
     for _ in range(50):
         if isinstance(app.screen, PlaylistBuilderScreen):
             return
         await pilot.pause(0.01)
     raise AssertionError("PlaylistBuilderScreen did not become active.")
+
+
+async def _wait_for_selector(app: BuilderTestApp, pilot, selector: str) -> None:
+    for _ in range(50):
+        try:
+            app.query_one(selector)
+            return
+        except Exception:
+            await pilot.pause(0.01)
+    raise AssertionError(f"Selector not found: {selector}")
 
 
 def test_playlist_builder_add_directory_recursively(
@@ -90,6 +108,75 @@ def test_playlist_builder_add_directory_recursively(
             await pilot.pause()
             names = sorted(track.path.name for track in app.playlist.tracks)
             assert names == ["inner.wav", "outer.mp3"]
+
+    asyncio.run(runner())
+
+
+def test_playlist_builder_hidden_path_confirm_continue(
+    tmp_path: Path, monkeypatch
+) -> None:
+    hidden = tmp_path / ".hidden"
+    hidden.mkdir()
+    (hidden / "secret.mp3").write_text("x", encoding="utf-8")
+
+    monkeypatch.setattr(playlist_builder, "FileBrowserWidget", DummyBrowser)
+
+    async def runner() -> None:
+        app = BuilderTestApp(tmp_path)
+        async with app.run_test() as pilot:
+            await _wait_for_builder(app, pilot)
+            captured: dict[str, object] = {}
+
+            def fake_push_screen(screen, callback=None, wait_for_dismiss=False):
+                captured["screen"] = screen
+                if callback:
+                    callback(True)
+                return None
+
+            app.push_screen = fake_push_screen  # type: ignore[assignment]
+            file_browser = app.screen.query_one("#builder_file_browser", DummyBrowser)
+            file_browser.set_selected_path(hidden)
+            app.screen.query_one("#builder_files_add", Button).press()
+            await pilot.pause()
+            assert isinstance(
+                captured.get("screen"), playlist_builder.HiddenPathConfirm
+            )
+            names = [track.path.name for track in app.playlist.tracks]
+            assert names == ["secret.mp3"]
+
+    asyncio.run(runner())
+
+
+def test_playlist_builder_hidden_path_confirm_cancel(
+    tmp_path: Path, monkeypatch
+) -> None:
+    hidden = tmp_path / ".hidden"
+    hidden.mkdir()
+    (hidden / "secret.mp3").write_text("x", encoding="utf-8")
+
+    monkeypatch.setattr(playlist_builder, "FileBrowserWidget", DummyBrowser)
+
+    async def runner() -> None:
+        app = BuilderTestApp(tmp_path)
+        async with app.run_test() as pilot:
+            await _wait_for_builder(app, pilot)
+            captured: dict[str, object] = {}
+
+            def fake_push_screen(screen, callback=None, wait_for_dismiss=False):
+                captured["screen"] = screen
+                if callback:
+                    callback(False)
+                return None
+
+            app.push_screen = fake_push_screen  # type: ignore[assignment]
+            file_browser = app.screen.query_one("#builder_file_browser", DummyBrowser)
+            file_browser.set_selected_path(hidden)
+            app.screen.query_one("#builder_files_add", Button).press()
+            await pilot.pause()
+            assert isinstance(
+                captured.get("screen"), playlist_builder.HiddenPathConfirm
+            )
+            assert app.playlist.tracks == []
 
     asyncio.run(runner())
 

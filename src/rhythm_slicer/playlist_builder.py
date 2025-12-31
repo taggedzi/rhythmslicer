@@ -11,6 +11,10 @@ from typing import Iterable, Iterator, Literal, TypeVar
 from rhythm_slicer.metadata import format_display_title, get_track_meta
 from rhythm_slicer.playlist import SUPPORTED_EXTENSIONS, Track
 
+FILE_ATTRIBUTE_HIDDEN = 0x2
+FILE_ATTRIBUTE_SYSTEM = 0x4
+INVALID_FILE_ATTRIBUTES = 0xFFFFFFFF
+
 
 @dataclass(frozen=True)
 class BrowserEntry:
@@ -107,12 +111,20 @@ class FileBrowserModel:
         return path.parent
 
 
-def collect_audio_files(paths: Iterable[Path]) -> list[Path]:
+def collect_audio_files(
+    paths: Iterable[Path], *, allow_hidden_roots: Iterable[Path] | None = None
+) -> list[Path]:
     """Collect supported audio files from files or folders (recursive)."""
     found: list[Path] = []
     seen: set[Path] = set()
+    allow_hidden_set = (
+        {_safe_resolve(path) for path in allow_hidden_roots}
+        if allow_hidden_roots
+        else set()
+    )
     for path in paths:
-        for item in _walk_audio_files(path):
+        allow_hidden = _safe_resolve(path) in allow_hidden_set
+        for item in _walk_audio_files(path, allow_hidden=allow_hidden):
             resolved = _safe_resolve(item)
             if resolved in seen:
                 continue
@@ -186,13 +198,39 @@ def reorder_items(
     return reordered, sorted(selected_set)
 
 
-def _walk_audio_files(path: Path) -> Iterator[Path]:
+def is_hidden_or_system(path: Path, *, include_parents: bool = False) -> bool:
+    """Return True if a path is hidden/system, optionally including parents."""
+    if not include_parents:
+        return _component_hidden_or_system(path)
+    current = path
+    while True:
+        if _component_hidden_or_system(current):
+            return True
+        parent = current.parent
+        if parent == current:
+            return False
+        current = parent
+
+
+def _walk_audio_files(path: Path, *, allow_hidden: bool = False) -> Iterator[Path]:
+    if not allow_hidden and is_hidden_or_system(path):
+        return
     if path.is_dir():
         for root, dirs, files in os.walk(path):
+            root_path = Path(root)
+            if not allow_hidden and is_hidden_or_system(root_path):
+                dirs[:] = []
+                continue
             dirs.sort(key=str.casefold)
             files.sort(key=str.casefold)
+            if not allow_hidden:
+                dirs[:] = [
+                    name for name in dirs if not is_hidden_or_system(root_path / name)
+                ]
             for name in files:
-                item = Path(root) / name
+                item = root_path / name
+                if not allow_hidden and is_hidden_or_system(item):
+                    continue
                 if _is_supported(item):
                     yield item
         return
@@ -209,3 +247,34 @@ def _safe_resolve(path: Path) -> Path:
         return path.resolve()
     except OSError:
         return path.absolute()
+
+
+def _component_hidden_or_system(path: Path) -> bool:
+    name = path.name
+    if name and name not in {".", ".."} and name.startswith("."):
+        return True
+    if path.parent == path:
+        return False
+    if not sys.platform.startswith("win"):
+        return False
+    attrs = _windows_file_attributes(path)
+    if attrs is None:
+        return False
+    return bool(attrs & (FILE_ATTRIBUTE_HIDDEN | FILE_ATTRIBUTE_SYSTEM))
+
+
+def _windows_file_attributes(path: Path) -> int | None:
+    try:
+        import ctypes
+    except Exception:
+        return None
+    try:
+        get_attrs = ctypes.windll.kernel32.GetFileAttributesW
+    except AttributeError:
+        return None
+    get_attrs.argtypes = [ctypes.c_wchar_p]
+    get_attrs.restype = ctypes.c_uint32
+    attrs = int(get_attrs(str(path)))
+    if attrs == INVALID_FILE_ATTRIBUTES:
+        return None
+    return attrs

@@ -4,11 +4,14 @@ from __future__ import annotations
 
 from pathlib import Path
 
+import pytest
+
 from rhythm_slicer import playlist_builder
 from rhythm_slicer.playlist_builder import (
     FileBrowserModel,
     _safe_resolve,
     collect_audio_files,
+    is_hidden_or_system,
     list_drives,
     reorder_items,
 )
@@ -24,6 +27,12 @@ def test_browser_entries_sorted_and_parent_first(tmp_path: Path) -> None:
     assert names[0] == ".."
     assert names[1:3] == ["A", "b"]
     assert names[3:] == ["a.flac", "z.mp3"]
+
+
+@pytest.fixture(autouse=True)
+def _disable_windows_hidden_attrs(monkeypatch) -> None:
+    if playlist_builder.sys.platform.startswith("win"):
+        monkeypatch.setattr(playlist_builder, "_windows_file_attributes", lambda _: 0)
 
 
 def test_browser_selection_clears_on_directory_change(tmp_path: Path) -> None:
@@ -47,6 +56,32 @@ def test_collect_audio_files_recursive(tmp_path: Path) -> None:
     results = collect_audio_files([tmp_path])
     names = sorted(path.name for path in results)
     assert names == ["loop.wav", "song.mp3"]
+
+
+def test_collect_audio_files_skips_dot_prefixed_directory(tmp_path: Path) -> None:
+    visible = tmp_path / "visible"
+    visible.mkdir()
+    (visible / "song.mp3").write_text("x", encoding="utf-8")
+    hidden = tmp_path / ".hidden"
+    hidden.mkdir()
+    (hidden / "secret.mp3").write_text("x", encoding="utf-8")
+    results = collect_audio_files([tmp_path])
+    assert [path.name for path in results] == ["song.mp3"]
+
+
+def test_collect_audio_files_skips_dot_prefixed_file(tmp_path: Path) -> None:
+    (tmp_path / ".hidden.mp3").write_text("x", encoding="utf-8")
+    (tmp_path / "song.mp3").write_text("x", encoding="utf-8")
+    results = collect_audio_files([tmp_path])
+    assert [path.name for path in results] == ["song.mp3"]
+
+
+def test_is_hidden_or_system_detects_dot_parent(tmp_path: Path) -> None:
+    hidden = tmp_path / ".hidden"
+    hidden.mkdir()
+    song = hidden / "song.mp3"
+    song.write_text("x", encoding="utf-8")
+    assert is_hidden_or_system(song, include_parents=True) is True
 
 
 def test_reorder_items_up_down() -> None:
@@ -139,3 +174,19 @@ def test_list_drives_windows_branch(monkeypatch) -> None:
     monkeypatch.setattr(playlist_builder.Path, "exists", fake_exists)
     drives = list_drives()
     assert drives == [Path("C:/"), Path("Z:/")]
+
+
+def test_is_hidden_or_system_uses_windows_attributes(
+    tmp_path: Path, monkeypatch
+) -> None:
+    path = tmp_path / "song.mp3"
+    path.write_text("x", encoding="utf-8")
+    monkeypatch.setattr(playlist_builder.sys, "platform", "win32")
+
+    def fake_attrs(target: Path) -> int | None:
+        if target == path:
+            return playlist_builder.FILE_ATTRIBUTE_HIDDEN
+        return 0
+
+    monkeypatch.setattr(playlist_builder, "_windows_file_attributes", fake_attrs)
+    assert is_hidden_or_system(path) is True
