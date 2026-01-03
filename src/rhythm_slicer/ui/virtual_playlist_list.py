@@ -1,9 +1,12 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from pathlib import Path
 from typing import Iterable, Sequence
 
 from rich.text import Text
+from textual import active_app
+from textual.strip import Strip
 from textual import events
 from textual.message import Message
 from textual.widget import Widget
@@ -26,6 +29,14 @@ class VirtualPlaylistList(Widget):
             super().__init__()
             self.index = index
 
+    class ScrollChanged(Message):
+        def __init__(self, *, offset: int, total: int, viewport: int) -> None:
+            super().__init__()
+            self.offset = offset
+            self.total = total
+            self.viewport = viewport
+            self.bubble = True
+
     def __init__(
         self,
         tracks: Sequence[Track] | None = None,
@@ -39,19 +50,26 @@ class VirtualPlaylistList(Widget):
         self.checked: set[int] = set()
         self.playing_index: int | None = None
         self.filtered_indices: list[int] | None = None
+        self._title_overrides: dict[Path, str] = {}
         self._scroll_offset = 0
 
     def on_mount(self) -> None:
-        self._update_virtual_size()
+        self.styles.height = "1fr"
+        self.styles.overflow_y = "hidden"
+        self._clamp_scroll_offset()
+        self._post_scroll_changed()
 
     def on_resize(self) -> None:
-        self._update_virtual_size()
+        self._clamp_scroll_offset()
+        self._post_scroll_changed()
         self.refresh()
 
     def set_tracks(self, tracks: Sequence[Track]) -> None:
         self._tracks = tracks
         self._sanitize_state()
-        self._update_virtual_size()
+        self._prune_title_overrides()
+        self._clamp_scroll_offset()
+        self._post_scroll_changed()
         self.refresh()
 
     def append_tracks(self, new_tracks: Sequence[Track]) -> None:
@@ -61,12 +79,16 @@ class VirtualPlaylistList(Widget):
             self._tracks = list(self._tracks)
         self._tracks.extend(new_tracks)
         self._sanitize_state()
-        self._update_virtual_size()
+        self._prune_title_overrides()
+        self._clamp_scroll_offset()
+        self._post_scroll_changed()
         self.refresh()
 
     def notify_data_changed(self) -> None:
         self._sanitize_state()
-        self._update_virtual_size()
+        self._prune_title_overrides()
+        self._clamp_scroll_offset()
+        self._post_scroll_changed()
         self.refresh()
 
     def set_checked_indices(self, indices: Iterable[int]) -> None:
@@ -90,6 +112,20 @@ class VirtualPlaylistList(Widget):
         self.checked = set(range(count))
         self.refresh()
 
+    def get_visible_indices(self) -> list[int]:
+        if not self._track_count():
+            return []
+        height = self._viewport_height()
+        start = self._scroll_offset
+        end = min(self._track_count(), start + height)
+        return list(range(start, end))
+
+    def set_title_override(self, path: Path, title: str) -> None:
+        if not title:
+            return
+        self._title_overrides[path] = title
+        self.refresh()
+
     def toggle_checked_at_cursor(self) -> None:
         count = self._track_count()
         if count <= 0:
@@ -105,6 +141,8 @@ class VirtualPlaylistList(Widget):
         count = self._track_count()
         if count <= 0:
             self.cursor_index = 0
+            self._scroll_offset = 0
+            self._post_scroll_changed()
             return
         clamped = self._clamp_index(index)
         if clamped == self.cursor_index:
@@ -175,30 +213,24 @@ class VirtualPlaylistList(Widget):
         self._scroll_by(-1)
         event.stop()
 
-    def render(self) -> Text:
-        height = max(1, self.size.height)
+    def render_line(self, y: int) -> Strip:
         width = max(1, self.size.width)
         start = self._scroll_offset
-        lines: list[Text] = []
-        for offset in range(height):
-            index = start + offset
-            if 0 <= index < self._track_count():
-                lines.append(self._render_row(index, width))
-            else:
-                lines.append(Text(""))
-        output = Text()
-        for idx, line in enumerate(lines):
-            if idx:
-                output.append("\n")
-            output.append_text(line)
-        return output
+        index = start + y
+        if 0 <= index < self._track_count():
+            line = self._render_row(index, width)
+        else:
+            line = Text("")
+        app = active_app.get()
+        segments = list(line.render(app.console))
+        return Strip(segments)
 
     def _render_row(self, index: int, width: int) -> Text:
         track = self._tracks[index]
         count_width = max(2, len(str(self._track_count() or 1)))
         marker = "[x]" if index in self.checked else "[ ]"
         playing = "▶" if self.playing_index == index else " "
-        title = track.title or track.path.name
+        title = self._title_overrides.get(track.path) or track.title or track.path.name
         line = f"{playing} {marker} {index + 1:>{count_width}d} {title}"
         line = _truncate_line(line, width)
         style = self._row_style(index)
@@ -221,25 +253,22 @@ class VirtualPlaylistList(Widget):
         if count <= 0:
             self.cursor_index = 0
             self.checked.clear()
+            self._scroll_offset = 0
+            self._post_scroll_changed()
             return
         self.cursor_index = self._clamp_index(self.cursor_index)
         self.checked = {idx for idx in self.checked if 0 <= idx < count}
-
-    def _update_virtual_size(self) -> None:
-        height = max(1, self._track_count())
-        self.virtual_size = self.size.with_height(height)
-        self._clamp_scroll_offset()
+        self._prune_title_overrides()
 
     def _ensure_cursor_visible(self) -> None:
-        height = max(1, self.size.height)
+        height = self._viewport_height()
         top = self._scroll_offset
         bottom = top + height - 1
         if self.cursor_index < top:
-            self._scroll_offset = self.cursor_index
+            self._scroll_to_offset(self.cursor_index)
         elif self.cursor_index > bottom:
             target = max(0, self.cursor_index - height + 1)
-            self._scroll_offset = target
-        self._clamp_scroll_offset()
+            self._scroll_to_offset(target)
 
     def _move_cursor(self, delta: int) -> None:
         self.set_cursor_index(self.cursor_index + delta)
@@ -251,18 +280,123 @@ class VirtualPlaylistList(Widget):
         return max(0, min(index, count - 1))
 
     def _scroll_by(self, delta: int) -> None:
-        self._scroll_offset += delta
-        self._clamp_scroll_offset()
-        self.refresh()
+        self._scroll_to_offset(self._scroll_offset + delta)
 
-    def _clamp_scroll_offset(self) -> None:
-        height = max(1, self.size.height)
-        max_offset = max(0, self._track_count() - height)
-        if self._scroll_offset < 0:
-            self._scroll_offset = 0
-        elif self._scroll_offset > max_offset:
-            self._scroll_offset = max_offset
+    def set_scroll_offset(self, offset: int) -> None:
+        self._scroll_to_offset(offset)
 
     @property
     def scroll_offset(self) -> int:
         return self._scroll_offset
+
+    def _scroll_to_offset(self, value: int) -> None:
+        target = max(0, min(value, self._max_scroll_offset()))
+        if target == self._scroll_offset:
+            return
+        self._scroll_offset = target
+        self._post_scroll_changed()
+        self.refresh()
+
+    def _max_scroll_offset(self) -> int:
+        count = self._track_count()
+        height = self._viewport_height()
+        return max(0, count - height)
+
+    def _viewport_height(self) -> int:
+        return max(1, self.size.height)
+
+    def _clamp_scroll_offset(self) -> None:
+        self._scroll_offset = min(max(0, self._scroll_offset), self._max_scroll_offset())
+
+    def _post_scroll_changed(self) -> None:
+        if not self.is_mounted:
+            return
+        self.post_message(
+            self.ScrollChanged(
+                offset=self._scroll_offset,
+                total=self._track_count(),
+                viewport=self._viewport_height(),
+            )
+        )
+
+    def _prune_title_overrides(self) -> None:
+        if not self._title_overrides:
+            return
+        paths = {track.path for track in self._tracks}
+        self._title_overrides = {
+            path: title for path, title in self._title_overrides.items() if path in paths
+        }
+
+
+class VirtualPlaylistScrollbar(Widget):
+    """Minimal vertical scrollbar for the virtual playlist list."""
+
+    class ScrollRequested(Message):
+        def __init__(self, offset: int) -> None:
+            super().__init__()
+            self.offset = offset
+            self.bubble = True
+
+    def __init__(self, *, id: str | None = None) -> None:
+        super().__init__(id=id)
+        self.can_focus = False
+        self._total = 0
+        self._offset = 0
+        self._viewport = 1
+
+    def set_state(self, *, total: int, offset: int, viewport: int) -> None:
+        self._total = max(0, total)
+        self._viewport = max(1, viewport)
+        self._offset = max(0, min(offset, self._max_offset()))
+        self.refresh()
+
+    def on_mouse_down(self, event: events.MouseDown) -> None:
+        if self._total <= self._viewport:
+            return
+        target = self._offset_from_y(event.y)
+        self.post_message(self.ScrollRequested(target))
+        event.stop()
+
+    def on_mouse_scroll_up(self, event: events.MouseScrollUp) -> None:
+        if self._total <= self._viewport:
+            return
+        self.post_message(self.ScrollRequested(self._offset - 1))
+        event.stop()
+
+    def on_mouse_scroll_down(self, event: events.MouseScrollDown) -> None:
+        if self._total <= self._viewport:
+            return
+        self.post_message(self.ScrollRequested(self._offset + 1))
+        event.stop()
+
+    def render_line(self, y: int) -> Strip:
+        height = max(1, self.size.height)
+        thumb_top, thumb_bottom = self._thumb_range(height)
+        char = "#" if thumb_top <= y < thumb_bottom else "|"
+        text = Text(char)
+        app = active_app.get()
+        segments = list(text.render(app.console))
+        return Strip(segments)
+
+    def _thumb_range(self, height: int) -> tuple[int, int]:
+        if self._total <= self._viewport:
+            return 0, height
+        max_offset = self._max_offset()
+        thumb_height = max(1, int(round(height * height / self._total)))
+        thumb_height = min(height, thumb_height)
+        available = max(1, height - thumb_height)
+        top = int(round(self._offset * available / max_offset))
+        return top, top + thumb_height
+
+    def _offset_from_y(self, y: int) -> int:
+        height = max(1, self.size.height)
+        if self._total <= self._viewport:
+            return 0
+        max_offset = self._max_offset()
+        if height <= 1:
+            return 0
+        ratio = max(0.0, min(1.0, y / (height - 1)))
+        return int(round(ratio * max_offset))
+
+    def _max_offset(self) -> int:
+        return max(0, self._total - self._viewport)

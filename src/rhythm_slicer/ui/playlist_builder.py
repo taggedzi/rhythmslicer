@@ -21,6 +21,11 @@ from textual.timer import Timer
 from textual.widget import Widget
 from textual.widgets import Button, Static
 
+from rhythm_slicer.metadata import (
+    format_display_title,
+    get_cached_track_meta,
+    get_track_meta,
+)
 from rhythm_slicer.playlist import Playlist, Track
 from rhythm_slicer.playlist_builder import (
     build_track_from_path,
@@ -31,7 +36,10 @@ from rhythm_slicer.playlist_builder import (
 from rhythm_slicer.playlist_io import save_m3u8
 from rhythm_slicer.ui.file_browser import FileBrowserWidget
 from rhythm_slicer.ui.marquee import Marquee
-from rhythm_slicer.ui.virtual_playlist_list import VirtualPlaylistList
+from rhythm_slicer.ui.virtual_playlist_list import (
+    VirtualPlaylistList,
+    VirtualPlaylistScrollbar,
+)
 
 
 @dataclass
@@ -69,6 +77,12 @@ class PlaylistBuilderScreen(Screen):
         self._scan_status_text = ""
         self._pending_commit_scan_id: int | None = None
         self._deferred_playlist_update = False
+        self._meta_queue: queue.Queue[Path] = queue.Queue()
+        self._meta_pending: set[Path] = set()
+        self._meta_stop = threading.Event()
+        self._meta_thread: threading.Thread | None = None
+        self._meta_timer: Timer | None = None
+        self._playlist_scrollbar: VirtualPlaylistScrollbar | None = None
 
     def compose(self) -> ComposeResult:
         with Container(id="builder_root"):
@@ -98,7 +112,11 @@ class PlaylistBuilderScreen(Screen):
                             id="builder_playlist_header",
                         ),
                         Marquee("", id="builder_playlist_details"),
-                        VirtualPlaylistList(id="builder_playlist"),
+                        Horizontal(
+                            VirtualPlaylistList(id="builder_playlist"),
+                            VirtualPlaylistScrollbar(id="builder_playlist_scrollbar"),
+                            id="builder_playlist_body",
+                        ),
                         Horizontal(
                             Button(
                                 "Select All",
@@ -121,8 +139,12 @@ class PlaylistBuilderScreen(Screen):
         self._playlist_list = self.query_one(
             "#builder_playlist", VirtualPlaylistList
         )
+        self._playlist_scrollbar = self.query_one(
+            "#builder_playlist_scrollbar", VirtualPlaylistScrollbar
+        )
         self._refresh_playlist_entries()
         self._set_scan_status_visible(False)
+        self._start_metadata_loader()
 
     def on_button_pressed(self, event: Button.Pressed) -> None:
         button_id = event.button.id
@@ -245,16 +267,18 @@ class PlaylistBuilderScreen(Screen):
             return
         playlist = self._ensure_playlist()
         self._playlist_list.set_tracks(playlist.tracks)
+        self._meta_pending.clear()
         if playlist.tracks:
             self._update_playlist_details(self._focused_playlist_index())
         else:
             self._clear_playlist_details()
 
     def _playlist_display_title(self, track: Track) -> str:
+        meta = get_cached_track_meta(track.path)
+        if meta:
+            return format_display_title(track.path, meta)
         if track.title and track.title != track.path.stem:
             return track.title
-        if track.title:
-            return track.path.name
         return track.path.name
 
     def _playlist_details_text(self, track: Track) -> str:
@@ -673,6 +697,66 @@ class PlaylistBuilderScreen(Screen):
         self._refresh_playlist_after_edit()
         self._refresh_playlist_entries()
 
+    def _start_metadata_loader(self) -> None:
+        if self._meta_thread:
+            return
+        self._meta_thread = threading.Thread(
+            target=self._metadata_loader, name="BuilderMetaLoader", daemon=True
+        )
+        self._meta_thread.start()
+        self._meta_timer = self.set_interval(0.25, self._queue_visible_metadata)
+
+    def _metadata_loader(self) -> None:
+        while not self._meta_stop.is_set():
+            try:
+                path = self._meta_queue.get(timeout=0.2)
+            except queue.Empty:
+                continue
+            try:
+                meta = get_track_meta(path)
+            except Exception:
+                meta = None
+            try:
+                self.app.call_from_thread(
+                    self._handle_metadata_loaded, path, meta
+                )
+            except Exception:
+                return
+
+    def _queue_visible_metadata(self) -> None:
+        if not self._playlist_list:
+            return
+        playlist = self._ensure_playlist()
+        if not playlist.tracks:
+            return
+        for index in self._playlist_list.get_visible_indices():
+            if index < 0 or index >= len(playlist.tracks):
+                continue
+            track = playlist.tracks[index]
+            if get_cached_track_meta(track.path) is not None:
+                title = self._playlist_display_title(track)
+                self._playlist_list.set_title_override(track.path, title)
+                continue
+            if track.path in self._meta_pending:
+                continue
+            self._meta_pending.add(track.path)
+            self._meta_queue.put(track.path)
+
+    def _handle_metadata_loaded(self, path: Path, meta) -> None:
+        self._meta_pending.discard(path)
+        if not self._playlist_list:
+            return
+        if meta:
+            title = format_display_title(path, meta)
+            self._playlist_list.set_title_override(path, title)
+        else:
+            self._playlist_list.set_title_override(path, path.name)
+        focused = self._focused_playlist_index()
+        if focused is not None:
+            track = self._ensure_playlist().tracks[focused]
+            if track.path == path:
+                self._update_playlist_details(focused)
+
     def _handle_scan_progress(self, scan_id: int, payload: dict[str, object]) -> None:
         if scan_id != self._active_scan_id:
             return
@@ -785,6 +869,13 @@ class PlaylistBuilderScreen(Screen):
             self._start_add_scan(paths, allow_hidden_roots=paths)
 
     def on_unmount(self) -> None:
+        if self._meta_timer:
+            try:
+                self._meta_timer.stop()
+            except Exception:
+                pass
+            self._meta_timer = None
+        self._meta_stop.set()
         for scan_id in list(self._scan_states.keys()):
             state = self._scan_states.pop(scan_id, None)
             if not state:
@@ -808,6 +899,24 @@ class PlaylistBuilderScreen(Screen):
         self, message: VirtualPlaylistList.CursorMoved
     ) -> None:
         self._update_playlist_details(message.index)
+
+    def on_virtual_playlist_list_scroll_changed(
+        self, message: VirtualPlaylistList.ScrollChanged
+    ) -> None:
+        if not self._playlist_scrollbar:
+            return
+        self._playlist_scrollbar.set_state(
+            total=message.total,
+            offset=message.offset,
+            viewport=message.viewport,
+        )
+
+    def on_virtual_playlist_scrollbar_scroll_requested(
+        self, message: VirtualPlaylistScrollbar.ScrollRequested
+    ) -> None:
+        if not self._playlist_list:
+            return
+        self._playlist_list.set_scroll_offset(message.offset)
 
     @staticmethod
     def _resolve_path(path: Path) -> Path:

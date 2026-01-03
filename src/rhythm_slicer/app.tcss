@@ -629,12 +629,31 @@ DrivePrompt {
 }
 
 #builder_file_browser,
-#builder_playlist {
+#builder_playlist_body {
     width: 100%;
     height: 1fr;
     overflow-x: hidden;
     text-overflow: ellipsis;
     text-wrap: nowrap;
+}
+
+#builder_playlist_body {
+    layout: horizontal;
+}
+
+#builder_playlist {
+    width: 1fr;
+    height: 1fr;
+    overflow-x: hidden;
+    text-overflow: ellipsis;
+    text-wrap: nowrap;
+}
+
+#builder_playlist_scrollbar {
+    width: 1;
+    height: 1fr;
+    color: $cyan_dim;
+    background: $panelB;
 }
 
 #builder_playlist_details {

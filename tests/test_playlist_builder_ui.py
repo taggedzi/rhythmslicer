@@ -619,7 +619,7 @@ def test_playlist_builder_selection_toggle_preserves_scroll(
                 "#builder_playlist", VirtualPlaylistList
             )
             playlist_list.set_cursor_index(40)
-            playlist_list._scroll_by(10)
+            playlist_list.set_scroll_offset(10)
             await pilot.pause()
             before_cursor = playlist_list.cursor_index
             before_scroll = playlist_list.scroll_offset
