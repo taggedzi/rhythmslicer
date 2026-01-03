@@ -5,10 +5,13 @@ from pathlib import Path
 import sqlite3
 import threading
 import time
-from typing import Iterable, Literal, Sequence
+from typing import Callable, Iterable, Literal, Sequence
+import logging
 
 from rhythm_slicer.config import get_config_dir
 from rhythm_slicer.metadata import METADATA_EXTRACTOR_VERSION, TrackMeta
+
+logger = logging.getLogger(__name__)
 
 SortMode = Literal["position", "title", "artist", "album", "duration", "path"]
 SortDir = Literal["asc", "desc"]
@@ -181,6 +184,136 @@ class PlaylistStoreSQLite:
                 (now, playlist_id),
             )
             self._conn.commit()
+
+    def remove_tracks_bulk(
+        self,
+        playlist_id: str,
+        track_ids: Sequence[int],
+        *,
+        cancel: threading.Event | Callable[[], bool] | None = None,
+        progress: Callable[[int, int], None] | None = None,
+    ) -> int:
+        if not track_ids:
+            return 0
+
+        def is_cancelled() -> bool:
+            if cancel is None:
+                return False
+            if isinstance(cancel, threading.Event):
+                return cancel.is_set()
+            if callable(cancel):
+                try:
+                    return bool(cancel())
+                except Exception:
+                    return False
+            return False
+
+        if is_cancelled():
+            logger.info("Bulk remove canceled before start playlist_id=%s", playlist_id)
+            return 0
+
+        removed = 0
+        chunk_size = 1000
+        total = len(track_ids)
+        with self._lock:
+            try:
+                logger.info(
+                    "Bulk remove start playlist_id=%s total=%d", playlist_id, total
+                )
+                self._conn.execute("BEGIN")
+                for start in range(0, total, chunk_size):
+                    logger.info(
+                        "Bulk remove delete chunk playlist_id=%s start=%d size=%d",
+                        playlist_id,
+                        start,
+                        min(chunk_size, total - start),
+                    )
+                    if is_cancelled():
+                        self._conn.execute("ROLLBACK")
+                        logger.info(
+                            "Bulk remove canceled during delete playlist_id=%s",
+                            playlist_id,
+                        )
+                        return 0
+                    chunk = track_ids[start : start + chunk_size]
+                    cursor = self._conn.executemany(
+                        """
+                        DELETE FROM playlist_items
+                        WHERE playlist_id = ? AND track_id = ?
+                        """,
+                        [(playlist_id, track_id) for track_id in chunk],
+                    )
+                    if cursor is not None and cursor.rowcount is not None:
+                        removed += max(0, int(cursor.rowcount))
+                    logger.info(
+                        "Bulk remove delete chunk done playlist_id=%s removed=%d",
+                        playlist_id,
+                        removed,
+                    )
+                    if progress:
+                        progress(min(start + len(chunk), total), total)
+                if is_cancelled():
+                    self._conn.execute("ROLLBACK")
+                    logger.info(
+                        "Bulk remove canceled before rebuild playlist_id=%s",
+                        playlist_id,
+                    )
+                    return 0
+                if removed:
+                    logger.info(
+                        "Bulk remove rebuild positions playlist_id=%s", playlist_id
+                    )
+                    self._conn.execute(
+                        """
+                        CREATE TEMP TABLE _playlist_items_new (
+                            playlist_id TEXT NOT NULL,
+                            position INTEGER NOT NULL,
+                            track_id INTEGER NOT NULL,
+                            PRIMARY KEY (playlist_id, position)
+                        )
+                        """
+                    )
+                    self._conn.execute(
+                        """
+                        INSERT INTO _playlist_items_new (playlist_id, position, track_id)
+                        SELECT playlist_id,
+                               ROW_NUMBER() OVER (ORDER BY position) - 1 AS position,
+                               track_id
+                        FROM playlist_items
+                        WHERE playlist_id = ?
+                        """,
+                        (playlist_id,),
+                    )
+                    self._conn.execute(
+                        "DELETE FROM playlist_items WHERE playlist_id = ?",
+                        (playlist_id,),
+                    )
+                    self._conn.execute(
+                        """
+                        INSERT INTO playlist_items (playlist_id, position, track_id)
+                        SELECT playlist_id, position, track_id
+                        FROM _playlist_items_new
+                        """
+                    )
+                    self._conn.execute("DROP TABLE _playlist_items_new")
+                    self._conn.execute(
+                        "UPDATE playlists SET updated_at = ? WHERE playlist_id = ?",
+                        (int(time.time()), playlist_id),
+                    )
+                    logger.info(
+                        "Bulk remove rebuild complete playlist_id=%s", playlist_id
+                    )
+                self._conn.commit()
+                logger.info(
+                    "Bulk remove commit playlist_id=%s removed=%d", playlist_id, removed
+                )
+            except Exception:
+                self._conn.execute("ROLLBACK")
+                logger.exception(
+                    "Bulk remove rollback playlist_id=%s", playlist_id
+                )
+                raise
+        return removed
 
     def move_tracks(
         self,

@@ -13,6 +13,8 @@ import queue
 import threading
 from typing import Callable, Optional, Sequence
 
+import logging
+
 from rich.text import Text
 from textual import events
 from textual.css.query import NoMatches
@@ -42,6 +44,8 @@ from rhythm_slicer.ui.virtual_playlist_list import (
     VirtualPlaylistScrollbar,
 )
 
+logger = logging.getLogger(__name__)
+
 
 @dataclass
 class _ScanState:
@@ -60,6 +64,22 @@ class _ScanProgress:
     path: str = ""
 
 
+@dataclass
+class _BulkRemoveProgress:
+    total: int
+    done: int = 0
+    lock: threading.Lock = threading.Lock()
+
+    def set(self, done: int, total: int) -> None:
+        with self.lock:
+            self.done = done
+            self.total = total
+
+    def get(self) -> tuple[int, int]:
+        with self.lock:
+            return self.done, self.total
+
+
 class PlaylistBuilderScreen(Screen):
     """Two-pane playlist builder inspired by Midnight Commander."""
 
@@ -76,6 +96,8 @@ class PlaylistBuilderScreen(Screen):
         self._scan_spinner_index = 0
         self._scan_spinner_frames = ["|", "/", "-", "\\"]
         self._scan_status_text = ""
+        self._remove_cancel_event: threading.Event | None = None
+        self._remove_modal: RemoveTracksProgress | None = None
         self._pending_commit_scan_id: int | None = None
         self._deferred_playlist_update = False
         self._playlist_store: PlaylistStoreSQLite | None = None
@@ -432,25 +454,70 @@ class PlaylistBuilderScreen(Screen):
         focused_index = self._focused_playlist_index()
         if not selected_track_ids and focused_index is None:
             return
+        selection = set(selected_track_ids)
+        if not selection and focused_index is not None:
+            row = store.get_row_at(view, focused_index)
+            if row:
+                selection = {row.track_id}
+        if not selection:
+            if hasattr(self.app, "_set_message"):
+                self.app._set_message("No tracks selected", level="warn")
+            logger.info("Remove requested with no selection")
+            return
         cursor_index = focused_index or 0
         playing_track_id = self._current_playing_track_id()
         original_count = self._playlist_count
+        cancel_event = threading.Event()
+        self._remove_cancel_event = cancel_event
+        total_selection = len(selection)
+        progress_state = _BulkRemoveProgress(total_selection)
+        self._remove_modal = RemoveTracksProgress(
+            total_selection,
+            cancel_event,
+            progress=progress_state,
+        )
+        if hasattr(self.app, "push_screen"):
+            self.app.push_screen(self._remove_modal)
+        logger.info(
+            "Bulk remove requested count=%d playing_track_id=%s",
+            total_selection,
+            playing_track_id,
+        )
+
+        selected_ids = sorted(selection)
+        selected_set = set(selected_ids)
 
         async def worker() -> None:
-            def apply() -> tuple[set[int], int]:
-                selection = set(selected_track_ids)
-                if not selection and focused_index is not None:
-                    row = store.get_row_at(view, focused_index)
-                    if row:
-                        selection = {row.track_id}
-                if not selection:
-                    return set(), store.count(view)
-                for track_id in selection:
-                    store.remove_track(playlist_id, track_id)
-                total = store.count(view)
-                return selection, total
+            def apply() -> tuple[set[int], int, int]:
+                logger.info("Bulk remove worker start selection=%d", len(selected_ids))
+                def report(done: int, total: int) -> None:
+                    progress_state.set(done, total)
 
-            selection, total = await asyncio.to_thread(apply)
+                removed = store.remove_tracks_bulk(
+                    playlist_id,
+                    selected_ids,
+                    cancel=cancel_event,
+                    progress=report,
+                )
+                total = store.count(view)
+                logger.info(
+                    "Bulk remove worker done removed=%d total=%d", removed, total
+                )
+                return selected_set, removed, total
+
+            try:
+                selection, removed, total = await asyncio.to_thread(apply)
+            except Exception:
+                logger.exception("Bulk remove failed")
+                self.app.call_later(self._finalize_remove_modal)
+                return
+            self.app.call_later(self._finalize_remove_modal)
+            if cancel_event.is_set() or removed <= 0:
+                logger.info(
+                    "Bulk remove canceled or removed=0 canceled=%s",
+                    cancel_event.is_set(),
+                )
+                return
             if not selection:
                 return
             self._handle_remove_complete(
@@ -460,9 +527,20 @@ class PlaylistBuilderScreen(Screen):
                 total,
                 cursor_index,
             )
+            logger.info("Bulk remove complete removed=%d total=%d", removed, total)
 
         self.app.run_worker(worker(), exclusive=True)
         return
+
+    def _finalize_remove_modal(self) -> None:
+        if self._remove_modal:
+            try:
+                self._remove_modal.dismiss(None)
+            except Exception:
+                logger.exception("Failed to dismiss remove modal")
+                pass
+        self._remove_modal = None
+        self._remove_cancel_event = None
 
     def action_remove_from_playlist(self) -> None:
         self._remove_selected_tracks()
@@ -1043,3 +1121,100 @@ class HiddenPathConfirm(ModalScreen[bool]):
             if isinstance(focused, Button):
                 focused.press()
                 event.stop()
+
+
+class RemoveTracksProgress(ModalScreen[None]):
+    """Modal progress overlay for bulk removal."""
+
+    def __init__(
+        self,
+        total: int,
+        cancel_event: threading.Event,
+        *,
+        progress: _BulkRemoveProgress | None = None,
+    ) -> None:
+        super().__init__()
+        self._total = max(0, total)
+        self._done = 0
+        self._cancel_event = cancel_event
+        self._progress = progress
+        self._spinner_index = 0
+        self._spinner_timer: Timer | None = None
+        self._spinner_frames = ["|", "/", "-", "\\"]
+
+    def compose(self) -> ComposeResult:
+        with Container(id="builder_remove_overlay"):
+            yield Static("Removing Tracks", id="builder_remove_title")
+            yield Static("", id="builder_remove_status")
+            with Horizontal(id="builder_remove_buttons"):
+                yield Button("Cancel", id="builder_remove_cancel")
+
+    def on_mount(self) -> None:
+        self._spinner_timer = self.set_interval(0.1, self._advance_spinner)
+        self._refresh_status()
+        try:
+            self.query_one("#builder_remove_cancel", Button).focus()
+        except Exception:
+            return
+
+    def on_unmount(self) -> None:
+        if self._spinner_timer is None:
+            return
+        try:
+            self._spinner_timer.stop()
+        except Exception:
+            pass
+        self._spinner_timer = None
+
+    def update_progress(self, done: int, total: int | None = None) -> None:
+        self._done = max(0, done)
+        if total is not None:
+            self._total = max(0, total)
+        self._refresh_status()
+
+    def _advance_spinner(self) -> None:
+        self._spinner_index = (self._spinner_index + 1) % len(self._spinner_frames)
+        self._refresh_status()
+
+    def _refresh_status(self) -> None:
+        try:
+            status = self.query_one("#builder_remove_status", Static)
+        except Exception:
+            return
+        if self._progress is not None:
+            done, total = self._progress.get()
+            self._done = done
+            self._total = total
+        spinner = self._spinner_frames[self._spinner_index]
+        total = self._total
+        if self._cancel_event.is_set():
+            status.update(f"{spinner} Canceling...")
+            return
+        if total > 0:
+            status.update(f"{spinner} Removing {min(self._done, total)} / {total}")
+        else:
+            status.update(f"{spinner} Removing...")
+
+    def _cancel(self) -> None:
+        if not self._cancel_event.is_set():
+            self._cancel_event.set()
+            logger.info("Bulk remove cancel requested")
+        try:
+            button = self.query_one("#builder_remove_cancel", Button)
+        except Exception:
+            button = None
+        if button:
+            button.disabled = True
+            button.label = "Canceling..."
+        self._refresh_status()
+
+    def on_button_pressed(self, event: Button.Pressed) -> None:
+        if event.button.id == "builder_remove_cancel":
+            self._cancel()
+            return
+        self.dismiss(None)
+
+    def on_key(self, event: events.Key) -> None:
+        if event.key == "escape":
+            self._cancel()
+            event.stop()

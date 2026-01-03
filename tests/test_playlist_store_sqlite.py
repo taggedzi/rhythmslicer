@@ -104,3 +104,66 @@ def test_metadata_invalidation_on_file_change(tmp_path: Path) -> None:
     _wait_for(lambda: len(calls) == 2)
     loader.stop()
     store.close()
+
+
+def _seed_playlist(
+    tmp_path: Path, *, count: int = 5
+) -> tuple[PlaylistStoreSQLite, list[int]]:
+    store = PlaylistStoreSQLite(db_path=tmp_path / "playlist.db")
+    paths = []
+    for idx in range(count):
+        path = tmp_path / f"track_{idx}.mp3"
+        path.write_text("x", encoding="utf-8")
+        paths.append(path)
+    store.replace_paths("main", paths)
+    track_ids = store.list_track_ids("main")
+    return store, track_ids
+
+
+def test_remove_tracks_bulk_rebuilds_positions(tmp_path: Path) -> None:
+    store, track_ids = _seed_playlist(tmp_path, count=5)
+    removed = store.remove_tracks_bulk("main", [track_ids[0], track_ids[2], track_ids[4]])
+    assert removed == 3
+    remaining = store.list_track_ids("main")
+    assert remaining == [track_ids[1], track_ids[3]]
+    with store._lock:
+        rows = store._conn.execute(
+            """
+            SELECT position, track_id
+            FROM playlist_items
+            WHERE playlist_id = ?
+            ORDER BY position
+            """,
+            ("main",),
+        ).fetchall()
+    assert [int(row["position"]) for row in rows] == [0, 1]
+    assert [int(row["track_id"]) for row in rows] == remaining
+
+
+def test_remove_tracks_bulk_cancel_rolls_back(tmp_path: Path) -> None:
+    store, track_ids = _seed_playlist(tmp_path, count=8)
+    cancel_event = threading.Event()
+
+    def progress(done: int, total: int) -> None:
+        if done >= total // 2:
+            cancel_event.set()
+
+    removed = store.remove_tracks_bulk(
+        "main", track_ids, cancel=cancel_event, progress=progress
+    )
+    assert removed == 0
+    assert store.list_track_ids("main") == track_ids
+
+
+def test_remove_tracks_bulk_commits_once(tmp_path: Path) -> None:
+    store, track_ids = _seed_playlist(tmp_path, count=3)
+    commits: list[str] = []
+
+    def trace(sql: str) -> None:
+        if sql.strip().upper() == "COMMIT":
+            commits.append(sql)
+
+    store._conn.set_trace_callback(trace)
+    store.remove_tracks_bulk("main", [track_ids[0]])
+    store._conn.set_trace_callback(None)
+    assert len(commits) == 1
