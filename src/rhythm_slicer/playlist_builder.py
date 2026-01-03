@@ -308,7 +308,9 @@ def _walk_audio_files(
                     counters.files += 1
                 if progress and counters is not None:
                     if counters.files % progress_every == 0:
-                        progress(counters.dirs, counters.files, counters.found, root_path)
+                        progress(
+                            counters.dirs, counters.files, counters.found, root_path
+                        )
                 if _is_supported(item):
                     yield item
             if progress and counters is not None:

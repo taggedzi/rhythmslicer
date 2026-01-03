@@ -837,8 +837,8 @@ class RhythmSlicerApp(App):
             self._selected_key = None
             return
         if rebuild or self._playlist_table_source is not self.playlist:
-            self._playlist_table.set_tracks(self.playlist.tracks)
             self._playlist_table_source = self.playlist
+        self._playlist_table.set_tracks(self.playlist.tracks)
         self._playlist_table.set_playing_index(self._playing_index)
         self._restore_table_cursor_from_selected()
 
@@ -1622,8 +1622,14 @@ class RhythmSlicerApp(App):
             playlist_builder_screen = None
         else:
             playlist_builder_screen = PlaylistBuilderScreen
-        if playlist_builder_screen is not None and isinstance(
-            self.screen, playlist_builder_screen
+        try:
+            current_screen = self.screen
+        except Exception:
+            current_screen = None
+        if (
+            playlist_builder_screen is not None
+            and current_screen is not None
+            and isinstance(current_screen, playlist_builder_screen)
         ):
             return
         self._refresh_playlist_table()

@@ -32,9 +32,7 @@ class MetadataLoader:
         self._threads: list[threading.Thread] = []
         self._notify: Callable[[Path, TrackMeta | None, int], None] | None = None
 
-    def start(
-        self, notify: Callable[[Path, TrackMeta | None, int], None]
-    ) -> None:
+    def start(self, notify: Callable[[Path, TrackMeta | None, int], None]) -> None:
         if self._threads:
             return
         self._notify = notify
@@ -123,9 +121,7 @@ class MetadataLoader:
 
     def _should_process(self, generation: int, path: Path) -> bool:
         with self._lock:
-            return (
-                generation == self._generation and path in self._desired
-            )
+            return generation == self._generation and path in self._desired
 
     def _discard_pending(self, path: Path) -> None:
         with self._lock:

@@ -163,10 +163,7 @@ class VirtualPlaylistTable(Widget):
             self.set_cursor_index(index)
             self.focus()
             now = time.monotonic()
-            if (
-                self._last_click_index == index
-                and now - self._last_click_time <= 0.4
-            ):
+            if self._last_click_index == index and now - self._last_click_time <= 0.4:
                 self.post_message(self.RowSelected(index))
             self._last_click_index = index
             self._last_click_time = now
@@ -313,7 +310,9 @@ class VirtualPlaylistTable(Widget):
         return max(1, self.size.height)
 
     def _clamp_scroll_offset(self) -> None:
-        self._scroll_offset = min(max(0, self._scroll_offset), self._max_scroll_offset())
+        self._scroll_offset = min(
+            max(0, self._scroll_offset), self._max_scroll_offset()
+        )
 
     def _post_scroll_changed(self) -> None:
         if not self.is_mounted:

@@ -303,7 +303,9 @@ class VirtualPlaylistList(Widget):
         return max(1, self.size.height)
 
     def _clamp_scroll_offset(self) -> None:
-        self._scroll_offset = min(max(0, self._scroll_offset), self._max_scroll_offset())
+        self._scroll_offset = min(
+            max(0, self._scroll_offset), self._max_scroll_offset()
+        )
 
     def _post_scroll_changed(self) -> None:
         if not self.is_mounted:
@@ -321,7 +323,9 @@ class VirtualPlaylistList(Widget):
             return
         paths = {track.path for track in self._tracks}
         self._title_overrides = {
-            path: title for path, title in self._title_overrides.items() if path in paths
+            path: title
+            for path, title in self._title_overrides.items()
+            if path in paths
         }
 
 

@@ -8,6 +8,7 @@ from textual.containers import Horizontal
 from textual.widgets import Button, Static
 
 from rhythm_slicer.ui.virtual_playlist_table import VirtualPlaylistTable
+
 if TYPE_CHECKING:
     from rhythm_slicer.tui import RhythmSlicerApp
 else:

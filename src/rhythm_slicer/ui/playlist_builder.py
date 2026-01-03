@@ -131,9 +131,7 @@ class PlaylistBuilderScreen(Screen):
 
     def on_mount(self) -> None:
         self._file_browser = self.query_one("#builder_file_browser", FileBrowserWidget)
-        self._playlist_list = self.query_one(
-            "#builder_playlist", VirtualPlaylistList
-        )
+        self._playlist_list = self.query_one("#builder_playlist", VirtualPlaylistList)
         self._playlist_scrollbar = self.query_one(
             "#builder_playlist_scrollbar", VirtualPlaylistScrollbar
         )
@@ -402,7 +400,11 @@ class PlaylistBuilderScreen(Screen):
         playlist = self._ensure_playlist()
         if playlist.is_empty():
             return
-        selection = set(self._playlist_list.get_checked_indices()) if self._playlist_list else set()
+        selection = (
+            set(self._playlist_list.get_checked_indices())
+            if self._playlist_list
+            else set()
+        )
         if not selection:
             # No selection means move the cursor row by default.
             focused = self._focused_playlist_index()
@@ -671,9 +673,7 @@ class PlaylistBuilderScreen(Screen):
                 new_paths.append(path)
             tracks = [build_track_from_path(path) for path in new_paths]
             try:
-                self.app.call_from_thread(
-                    self._finalize_commit_tracks, scan_id, tracks
-                )
+                self.app.call_from_thread(self._finalize_commit_tracks, scan_id, tracks)
             except Exception:
                 return
 
