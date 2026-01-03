@@ -12,7 +12,7 @@ import traceback
 from typing import Callable
 from typing import Iterable, Iterator, Literal, TypeVar
 
-from rhythm_slicer.playlist import SUPPORTED_EXTENSIONS, Track
+from rhythm_slicer.playlist import SUPPORTED_EXTENSIONS
 
 FILE_ATTRIBUTE_HIDDEN = 0x2
 FILE_ATTRIBUTE_SYSTEM = 0x4
@@ -171,11 +171,6 @@ def collect_audio_files(
     if sort_results:
         found.sort(key=lambda item: str(item).casefold())
     return found
-
-
-def build_track_from_path(path: Path) -> Track:
-    title = path.name
-    return Track(path=path, title=title)
 
 
 def list_drives() -> list[Path]:

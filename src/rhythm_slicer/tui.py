@@ -8,7 +8,7 @@ import asyncio
 import random
 from pathlib import Path
 import time
-from typing import Any, Callable, Iterator, Optional
+from typing import Any, Callable, Iterator, Optional, Sequence
 import logging
 
 try:
@@ -32,7 +32,7 @@ from rhythm_slicer.logging_setup import set_console_level
 from rhythm_slicer.ui.frame_player import FramePlayer
 from rhythm_slicer.ui.help_modal import HelpModal
 from rhythm_slicer.ui.bindings import normalize_bindings
-from rhythm_slicer.ui.metadata_loader import MetadataLoader
+from rhythm_slicer.ui.metadata_loader import MetadataLoader, TrackRef
 from rhythm_slicer.ui.play_order import build_play_order
 from rhythm_slicer.ui.playlist_file_picker import (
     PlaylistFilePicker,
@@ -86,16 +86,13 @@ from rhythm_slicer.ui.tui_widgets import (
     VisualizerHud,
 )
 from rhythm_slicer.visualizations.ansi import sanitize_ansi_sgr
-from rhythm_slicer.metadata import (
-    TrackMeta,
-    get_cached_track_meta,
-    get_track_meta,
-)
+from rhythm_slicer.metadata import TrackMeta
 from rhythm_slicer.player_vlc import VlcPlayer
-from rhythm_slicer.playlist import (
-    Playlist,
-    Track,
-    load_from_input,
+from rhythm_slicer.playlist import load_paths_from_input
+from rhythm_slicer.playlist_store_sqlite import (
+    PlaylistStoreSQLite,
+    PlaylistView,
+    TrackRow,
 )
 
 logger = logging.getLogger(__name__)
@@ -163,7 +160,6 @@ class RhythmSlicerApp(App):
         *,
         player: VlcPlayer,
         path: str,
-        playlist: Optional[Playlist] = None,
         viz_name: Optional[str] = None,
         now: Callable[[], float] = time.monotonic,
         rng: Optional[random.Random] = None,
@@ -172,7 +168,6 @@ class RhythmSlicerApp(App):
         self.player = player
         self.path = path
         self._explicit_path = bool(path)
-        self.playlist = playlist
         self._filename = Path(path).name if path else "RhythmSlicer"
         config = load_config()
         self._config = config
@@ -197,6 +192,9 @@ class RhythmSlicerApp(App):
         self._open_recursive = config.open_recursive
         self._status_controller = StatusController(self._now)
         self._playing_index: Optional[int] = None
+        self._playing_track_id: Optional[int] = None
+        self._selected_index: Optional[int] = None
+        self._selected_track_id: Optional[int] = None
         self._visualizer: Optional[Static] = None
         self._visualizer_hud: Optional[Static] = None
         self._playlist_list: Optional[Static] = None
@@ -205,7 +203,6 @@ class RhythmSlicerApp(App):
         self._playlist_counter_text: Optional[str] = None
         self._playlist_title_column = "title"
         self._playlist_artist_column = "artist"
-        self._playlist_table_source: Optional[Playlist] = None
         self._playlist_table_width = 0
         self._playlist_title_max = 0
         self._playlist_artist_max = 0
@@ -215,7 +212,7 @@ class RhythmSlicerApp(App):
         self._user_navigating_until = 0.0
         self._track_panel_last_update = 0.0
         self._track_panel_last_signature: Optional[TrackSignature] = None
-        self._track_panel_last_track_key: Optional[str] = None
+        self._track_panel_last_track_key: Optional[int] = None
         self._loading = False
         self._play_request_id = 0
         self._status_time_bar: Optional[Static] = None
@@ -256,12 +253,21 @@ class RhythmSlicerApp(App):
         self._hang_watchdog: Optional[HangWatchdog] = None
         self._too_small_active = False
         self._suppress_table_events = False
-        self._meta_loading: set[Path] = set()
         self._viz_request_id = 0
-        self._playlist_meta_loader = MetadataLoader(max_workers=4, queue_limit=200)
+        self._playlist_store = PlaylistStoreSQLite()
+        self._playlist_id = "main"
+        self._playlist_view = PlaylistView(playlist_id=self._playlist_id)
+        self._playlist_view_generation = 0
+        self._playlist_request_id = 0
+        self._playlist_count = 0
+        self._playlist_meta_loader = MetadataLoader(
+            max_workers=4,
+            queue_limit=200,
+            get_cached=self._playlist_store.fetch_metadata_if_valid,
+        )
         self._playlist_meta_generation = 0
         self._playlist_meta_prefetch = 5
-        self._playlist_paths_set: set[Path] = set()
+        self._current_track_row: TrackRow | None = None
 
     # ===== Layout / sizing helpers =====
     def compose(self) -> ComposeResult:
@@ -385,11 +391,9 @@ class RhythmSlicerApp(App):
         state = self.player.get_state()
         title = None
         track_index = None
-        if self.playlist and not self.playlist.is_empty():
-            track = self.playlist.current()
-            if track:
-                title = track.title
-                track_index = self.playlist.index
+        if self._current_track_row:
+            title = self._current_track_row.title or self._current_track_row.path.name
+            track_index = self._playing_index
         position = self.player.get_position_ms()
         pos_sec = None if position is None else int(position / 1000)
         logger.info(
@@ -440,7 +444,7 @@ class RhythmSlicerApp(App):
     def _visualizer_mode(self) -> str:
         if self._loading:
             return "LOADING"
-        if not self.playlist or self.playlist.is_empty():
+        if self._playlist_count <= 0:
             return "IDLE"
         return self._playback_state_label()
 
@@ -528,13 +532,16 @@ class RhythmSlicerApp(App):
 
     def _render_visualizer_hud(self) -> Text:
         width, height = self._visualizer_hud_size()
+        row = self._current_track_row
+        title = row.title if row and row.title else (row.path.name if row else "—")
+        artist = row.artist if row and row.artist else "Unknown"
+        album = row.album if row and row.album else "Unknown"
         return render_visualizer_hud(
             width=width,
             height=height,
-            playlist=self.playlist,
-            playing_index=self._playing_index,
-            get_meta_cached=self._get_track_meta_cached,
-            ensure_meta_loaded=self._ensure_track_meta_loaded,
+            title=title,
+            artist=artist,
+            album=album,
             ellipsize_fn=ellipsize,
         )
 
@@ -568,19 +575,20 @@ class RhythmSlicerApp(App):
         return line
 
     def _render_track_counter(self) -> str:
-        total_tracks = len(self.playlist.tracks) if self.playlist else 0
+        total_tracks = self._playlist_count
         width = max(4, len(str(total_tracks)))
         playing_index = self._playing_index
         display_index = playing_index + 1 if playing_index is not None else 0
         return f"{display_index:0{width}d}/{total_tracks:0{width}d}"
 
     def _render_playlist_footer(self) -> str:
-        if not self.playlist or self.playlist.is_empty():
+        if self._playlist_count <= 0:
             current = "--"
             total = 0
         else:
-            current = str(self.playlist.index + 1)
-            total = len(self.playlist.tracks)
+            current_index = self._selected_index or 0
+            current = str(current_index + 1)
+            total = self._playlist_count
         text = f"Track: {current}/{total}"
         return _truncate_line(text, self._playlist_width())
 
@@ -661,33 +669,17 @@ class RhythmSlicerApp(App):
 
     # --- Visualizer ---
 
-    def _get_track_meta_cached(self, path: Path) -> Optional[TrackMeta]:
-        return get_cached_track_meta(path)
-
-    def _ensure_track_meta_loaded(self, path: Path) -> None:
-        if get_cached_track_meta(path) is not None:
-            return
-        if path in self._meta_loading:
-            return
-        self._meta_loading.add(path)
-
-        async def load_meta() -> None:
-            try:
-                await asyncio.to_thread(get_track_meta, path)
-            except Exception:
-                logger.exception("Metadata load failed for %s", path)
-            finally:
-                self._meta_loading.discard(path)
-            self._update_playlist_view()
-            self._update_visualizer_hud()
-
-        self.run_worker(load_meta(), exclusive=False)
-
     def _start_playlist_metadata_loader(self) -> None:
-        def notify(path: Path, meta: TrackMeta | None, generation: int) -> None:
+        def notify(
+            track_id: int, path: Path, meta: TrackMeta | None, generation: int
+        ) -> None:
             try:
                 self.call_from_thread(
-                    self._handle_playlist_metadata_loaded, path, meta, generation
+                    self._handle_playlist_metadata_loaded,
+                    track_id,
+                    path,
+                    meta,
+                    generation,
                 )
             except Exception:
                 return
@@ -698,32 +690,120 @@ class RhythmSlicerApp(App):
         self._playlist_meta_generation += 1
         self._playlist_meta_loader.set_generation(self._playlist_meta_generation)
 
-    def _queue_visible_metadata(self) -> None:
-        if not self._playlist_table or not self.playlist:
-            return
-        if self.playlist.is_empty():
+    def _bump_playlist_view_generation(self) -> None:
+        self._playlist_view_generation += 1
+
+    def _request_playlist_page(self) -> None:
+        if not self._playlist_table:
             return
         offset, total, viewport = self._playlist_table.view_info()
-        if total <= 0 or viewport <= 0:
+        if viewport <= 0:
             return
         prefetch = self._playlist_meta_prefetch
         start = max(0, offset - prefetch)
-        end = min(total, offset + viewport + prefetch)
-        paths = [self.playlist.tracks[idx].path for idx in range(start, end)]
-        self._playlist_meta_loader.update_visible(paths)
+        end = min(max(total, self._playlist_count), offset + viewport + prefetch)
+        if end <= start:
+            return
+        self._playlist_request_id += 1
+        request_id = self._playlist_request_id
+        generation = self._playlist_view_generation
+
+        async def worker() -> None:
+            playing_track_id = self._playing_track_id
+
+            def fetch() -> tuple[int, list[TrackRow], int | None]:
+                total_count = self._playlist_store.count(self._playlist_view)
+                rows = self._playlist_store.page(
+                    self._playlist_view, start, end - start
+                )
+                playing_index = None
+                if playing_track_id is not None:
+                    playing_index = self._playlist_store.get_position(
+                        self._playlist_view, playing_track_id
+                    )
+                return total_count, rows, playing_index
+
+            total_count, rows, playing_index = await asyncio.to_thread(fetch)
+            self.call_later(
+                self._apply_playlist_page,
+                request_id,
+                generation,
+                start,
+                total_count,
+                rows,
+                playing_index,
+            )
+
+        self.run_worker(worker(), exclusive=False)
+
+    def _apply_playlist_page(
+        self,
+        request_id: int,
+        generation: int,
+        offset: int,
+        total_count: int,
+        rows: Sequence[TrackRow],
+        playing_index: int | None,
+    ) -> None:
+        if generation != self._playlist_view_generation:
+            return
+        if request_id != self._playlist_request_id:
+            return
+        self._playlist_count = total_count
+        if not self._playlist_table:
+            return
+        if total_count <= 0:
+            self._playlist_table.reset()
+            self._playlist_table.set_total_count(0)
+            self._update_playlist_controls()
+            return
+        self._playlist_table.set_total_count(total_count)
+        self._playlist_table.set_rows(offset, rows)
+        self._playlist_table.set_playing_track_id(self._playing_track_id)
+        if playing_index is not None:
+            self._playing_index = playing_index
+        if self._selected_index is None:
+            self._selected_index = 0
+        if self._selected_index is not None:
+            if self._selected_index >= total_count:
+                self._selected_index = total_count - 1
+            self._selected_key = self._playlist_row_key(self._selected_index)
+            self._move_table_cursor(self._selected_index)
+            cached = self._playlist_table.get_cached_row(self._selected_index)
+            if cached:
+                self._selected_track_id = cached.track_id
+        self._queue_metadata_for_rows(rows)
+        self._update_playlist_controls()
+
+    def _queue_metadata_for_rows(self, rows: Sequence[TrackRow]) -> None:
+        if not rows:
+            return
+        refs = [TrackRef(row.track_id, row.path) for row in rows]
+        self._playlist_meta_loader.update_visible(refs)
 
     def _handle_playlist_metadata_loaded(
-        self, path: Path, meta: TrackMeta | None, generation: int
+        self,
+        track_id: int,
+        path: Path,
+        meta: TrackMeta | None,
+        generation: int,
     ) -> None:
         if generation != self._playlist_meta_generation:
             return
-        if path not in self._playlist_paths_set:
+        if meta is None:
+            meta = TrackMeta(artist=None, title=None, album=None, duration_seconds=None)
+        try:
+            self._playlist_store.upsert_metadata(track_id, meta)
+        except Exception:
+            logger.exception("Failed to store metadata for %s", path)
             return
-        if self._playlist_table:
-            self._playlist_table.refresh()
-        current = self.playlist.current() if self.playlist else None
-        if current and current.path == path:
-            self._update_visualizer_hud()
+        row = self._playlist_store.get_row_by_track_id(track_id)
+        if row:
+            if self._playlist_table:
+                self._playlist_table.update_row(track_id, row)
+            if self._current_track_row and self._current_track_row.track_id == track_id:
+                self._current_track_row = row
+                self._update_visualizer_hud()
 
     def _center_visualizer_message(self, message: str, width: int, height: int) -> str:
         return center_visualizer_message(message, width, height)
@@ -732,26 +812,14 @@ class RhythmSlicerApp(App):
         return visualizer_hud_size(self._visualizer_hud)
 
     def _current_track_signature(self) -> TrackSignature:
-        track_key = (
-            self._playlist_row_key(self._playing_index)
-            if self._playing_index is not None
-            else None
-        )
-        track = None
-        if self.playlist and self._playing_index is not None:
-            if 0 <= self._playing_index < len(self.playlist.tracks):
-                track = self.playlist.tracks[self._playing_index]
-        meta = self._get_track_meta_cached(track.path) if track else None
-        if track and meta is None:
-            self._ensure_track_meta_loaded(track.path)
-        title = meta.title if meta and meta.title else (track.title if track else "—")
-        if not title and track:
-            title = track.path.name
-        artist = meta.artist if meta and meta.artist else "Unknown"
-        album = meta.album if meta and meta.album else "Unknown"
+        track_id = self._playing_track_id
+        row = self._current_track_row
+        title = row.title if row and row.title else (row.path.name if row else "—")
+        artist = row.artist if row and row.artist else "Unknown"
+        album = row.album if row and row.album else "Unknown"
         width, height = self._visualizer_hud_size()
         return (
-            track_key,
+            track_id,
             title,
             artist,
             album,
@@ -784,13 +852,13 @@ class RhythmSlicerApp(App):
         self._playlist_table.reset()
         self._playing_key = None
         self._selected_key = None
+        self._playlist_table.set_total_count(0)
 
     def _refresh_playlist_table_after_layout(self) -> None:
         if self._playlist_table_content_width() <= 0:
             self.set_timer(0.05, self._refresh_playlist_table_after_layout)
             return
         self._refresh_playlist_table(rebuild=True)
-        self._queue_visible_metadata()
 
     def _playlist_row_key(self, index: int) -> str:
         return str(index)
@@ -827,25 +895,23 @@ class RhythmSlicerApp(App):
         self._move_table_cursor(row_index)
 
     def _refresh_playlist_table(self, *, rebuild: bool = False) -> None:
+        del rebuild
         if not self._playlist_table:
             return
-        if not self.playlist or self.playlist.is_empty():
-            self._playlist_table.set_tracks([])
-            self._playlist_table.set_playing_index(None)
-            self._playlist_table_source = self.playlist
+        if self._playlist_count <= 0:
+            self._playlist_table.reset()
+            self._playlist_table.set_total_count(0)
             self._playing_key = None
             self._selected_key = None
             return
-        if rebuild or self._playlist_table_source is not self.playlist:
-            self._playlist_table_source = self.playlist
-        self._playlist_table.set_tracks(self.playlist.tracks)
-        self._playlist_table.set_playing_index(self._playing_index)
+        self._playlist_table.set_playing_track_id(self._playing_track_id)
         self._restore_table_cursor_from_selected()
+        self._request_playlist_page()
 
     def _update_playing_row_style(self) -> None:
         if not self._playlist_table:
             return
-        self._playlist_table.set_playing_index(self._playing_index)
+        self._playlist_table.set_playing_track_id(self._playing_track_id)
 
     def _set_selected(
         self,
@@ -854,10 +920,10 @@ class RhythmSlicerApp(App):
         move_cursor: bool = True,
         update_selected_key: bool = True,
     ) -> None:
-        if not self.playlist or self.playlist.is_empty():
+        if self._playlist_count <= 0:
             return
-        index = max(0, min(index, len(self.playlist.tracks) - 1))
-        self.playlist.set_index(index)
+        index = max(0, min(index, self._playlist_count - 1))
+        self._selected_index = index
         self._sync_play_order_pos()
         if update_selected_key:
             self._selected_key = self._playlist_row_key(index)
@@ -868,52 +934,51 @@ class RhythmSlicerApp(App):
     def _set_user_navigation_lockout(self) -> None:
         self._user_navigating_until = time.monotonic() + 1.0
 
-    async def _populate_playlist(self) -> None:
-        if self.playlist is None:
-            return
-        self._update_playlist_view()
-
-    def _sync_selection(self) -> None:
-        if not self.playlist or self.playlist.is_empty():
-            return
-        self._update_playlist_view()
-
-    async def set_playlist(
-        self, playlist: Playlist, *, preserve_path: Optional[Path]
+    async def set_playlist_paths(
+        self, paths: Sequence[Path], *, preserve_path: Optional[Path]
     ) -> None:
         """Replace the current playlist and refresh UI state."""
-        self.playlist = playlist
-        self._playlist_paths_set = {track.path for track in playlist.tracks}
         self._bump_playlist_meta_generation()
+        self._bump_playlist_view_generation()
+
+        def apply_changes() -> tuple[int, int | None, int | None]:
+            self._playlist_store.replace_paths(self._playlist_id, paths)
+            total = self._playlist_store.count(self._playlist_view)
+            selected_track_id = None
+            position = None
+            if preserve_path:
+                selected_track_id = self._playlist_store.get_track_id_for_path(
+                    preserve_path
+                )
+                if selected_track_id is not None:
+                    position = self._playlist_store.get_position(
+                        self._playlist_view, selected_track_id
+                    )
+            return total, selected_track_id, position
+
+        if getattr(self, "_loop", None) is None:
+            total, selected_track_id, position = apply_changes()
+        else:
+            total, selected_track_id, position = await asyncio.to_thread(apply_changes)
+        self._playlist_count = total
         self._scroll_offset = 0
-        if preserve_path and playlist.tracks:
-            for idx, track in enumerate(playlist.tracks):
-                if track.path == preserve_path:
-                    playlist.set_index(idx)
-                    break
-            else:
-                playlist.set_index(0)
-        elif playlist.tracks:
-            playlist.set_index(0)
+        self._selected_index = 0 if total > 0 else None
+        self._selected_track_id = None
+        if selected_track_id is not None and position is not None:
+            self._selected_index = position
+            self._selected_track_id = selected_track_id
         self._reset_play_order()
-        await self._populate_playlist()
-        self._sync_selection()
+        self._update_playlist_view()
         self._refresh_transport_controls()
 
     async def set_playlist_from_open(
-        self, playlist: Playlist, source_path: Path
+        self, paths: Sequence[Path], source_path: Path
     ) -> None:
-        self.playlist = playlist
-        self._playlist_paths_set = {track.path for track in playlist.tracks}
-        self._bump_playlist_meta_generation()
-        self.playlist.set_index(0)
+        await self.set_playlist_paths(paths, preserve_path=None)
         self._filename = source_path.name
-        self._scroll_offset = 0
-        self._reset_play_order()
-        await self._populate_playlist()
-        self._sync_selection()
         self._last_open_path = source_path
-        self._play_current_track(on_failure="skip")
+        if self._playlist_count > 0:
+            self._play_current_track(on_failure="skip")
         self._refresh_transport_controls()
 
     def _set_loading(self, active: bool, *, message: str = "Loading...") -> None:
@@ -924,8 +989,8 @@ class RhythmSlicerApp(App):
         self._refresh_transport_controls()
         self._update_status_panel(force=True)
 
-    def _load_and_play_blocking(self, track: Track) -> None:
-        self.player.load(str(track.path))
+    def _load_and_play_blocking(self, path: Path) -> None:
+        self.player.load(str(path))
         self.player.play()
         setter = getattr(self.player, "set_playback_rate", None)
         if callable(setter):
@@ -933,28 +998,39 @@ class RhythmSlicerApp(App):
 
     async def _play_track_worker(
         self,
-        track: Track,
+        track: TrackRow,
         *,
+        track_index: int | None,
         request_id: int,
         on_failure: str,
     ) -> None:
         try:
-            await asyncio.to_thread(self._load_and_play_blocking, track)
+            await asyncio.to_thread(self._load_and_play_blocking, track.path)
         except Exception as exc:
             self._handle_playback_error(exc, track, on_failure, request_id)
         else:
-            self._handle_playback_started(track, request_id)
+            self._handle_playback_started(track, request_id, track_index)
 
-    def _handle_playback_started(self, track: Track, request_id: Optional[int]) -> None:
+    def _handle_playback_started(
+        self,
+        track: TrackRow,
+        request_id: Optional[int],
+        track_index: int | None,
+    ) -> None:
         if request_id is not None and request_id != self._play_request_id:
             return
         self._loading = False
-        playlist_index = self.playlist.index if self.playlist else None
-        self._playing_index = playlist_index
-        logger.info("Track change index=%s path=%s", playlist_index, track.path)
+        self._playing_track_id = track.track_id
+        self._current_track_row = track
+        self._playing_index = track_index
+        self._current_track_path = track.path
+        logger.info("Track change id=%s path=%s", track.track_id, track.path)
         self._set_message("Playing")
         self._update_playing_row_style()
-        self._sync_selection()
+        self._update_playlist_view()
+        self._playlist_meta_loader.update_visible(
+            [TrackRef(track.track_id, track.path)]
+        )
         self._start_hackscript(
             track.path,
             playback_pos_ms=self._get_playback_position_ms(),
@@ -968,7 +1044,7 @@ class RhythmSlicerApp(App):
     def _handle_playback_error(
         self,
         exc: Exception,
-        track: Track,
+        track: TrackRow,
         on_failure: str,
         request_id: Optional[int],
     ) -> None:
@@ -976,41 +1052,62 @@ class RhythmSlicerApp(App):
             return
         self._loading = False
         logger.exception("Playback failed for %s", track.path)
-        self._set_message(f"Failed to play: {track.title}", level="error")
+        title = track.title or track.path.name
+        self._set_message(f"Failed to play: {title}", level="error")
         self._refresh_transport_controls()
         if on_failure == "skip":
             self._skip_failed_track()
         self._update_status_panel(force=True)
 
     def _play_current_track(self, *, on_failure: str = "message") -> bool:
-        if not self.playlist or self.playlist.is_empty():
+        if self._playlist_count <= 0:
             return False
-        track = self.playlist.current()
-        if not track:
-            return False
+        index = self._selected_index or 0
         self._play_request_id += 1
         request_id = self._play_request_id
+        self._set_loading(True)
+        self._play_track_at_index(index, request_id=request_id, on_failure=on_failure)
+        return True
+
+    def _play_track_at_index(
+        self, index: int, *, request_id: int, on_failure: str
+    ) -> None:
+        async def worker() -> None:
+            row = await asyncio.to_thread(
+                self._playlist_store.get_row_at, self._playlist_view, index
+            )
+            if row is None:
+                self.call_from_thread(
+                    self._set_message, "Track not found", level="warn"
+                )
+                self.call_from_thread(self._set_loading, False)
+                return
+            await self._play_track_worker(
+                row,
+                track_index=index,
+                request_id=request_id,
+                on_failure=on_failure,
+            )
+
         try:
             asyncio.get_running_loop()
         except RuntimeError:
+            row = self._playlist_store.get_row_at(self._playlist_view, index)
+            if row is None:
+                self._set_message("Track not found", level="warn")
+                self._set_loading(False)
+                return
             try:
-                self._load_and_play_blocking(track)
+                self._load_and_play_blocking(row.path)
             except Exception as exc:
-                self._handle_playback_error(exc, track, on_failure, request_id)
-                return False
-            self._handle_playback_started(track, request_id)
-            return True
-        self._set_loading(True)
-        self.run_worker(
-            self._play_track_worker(
-                track, request_id=request_id, on_failure=on_failure
-            ),
-            exclusive=True,
-        )
-        return True
+                self._handle_playback_error(exc, row, on_failure, request_id)
+                return
+            self._handle_playback_started(row, request_id, index)
+            return
+        self.run_worker(worker(), exclusive=True)
 
     def _advance_track(self, auto: bool = False) -> None:
-        if not self.playlist or self.playlist.is_empty():
+        if self._playlist_count <= 0:
             return
         if auto and self._repeat_mode == "one":
             self._play_current_track(on_failure="skip")
@@ -1020,20 +1117,22 @@ class RhythmSlicerApp(App):
         if next_index is None:
             if auto and self._repeat_mode == "off":
                 self.player.stop()
-                self._stop_hackscript()
+            self._stop_hackscript()
             self._set_message("End of playlist")
             return
         self._set_selected(next_index, move_cursor=False, update_selected_key=False)
         self._play_current_track(on_failure="skip")
 
     def _skip_failed_track(self) -> None:
-        if not self.playlist or self.playlist.is_empty():
+        if self._playlist_count <= 0:
             return
-        attempts = len(self.playlist.tracks)
+        attempts = self._playlist_count
+        wrap = self._repeat_mode == "all"
         while attempts > 0:
-            track = self.playlist.next()
-            if track is None:
+            next_index = self._next_index(wrap=wrap)
+            if next_index is None:
                 break
+            self._set_selected(next_index, move_cursor=False, update_selected_key=False)
             if self._play_current_track(on_failure="skip"):
                 return
             attempts -= 1
@@ -1128,7 +1227,7 @@ class RhythmSlicerApp(App):
             desired_state = "playing"
             logger.info("Playback resumed")
         else:
-            if self.playlist and not self.playlist.is_empty():
+            if self._playlist_count > 0:
                 if self._play_current_track(on_failure="message"):
                     logger.info("Playback started")
                 return
@@ -1150,6 +1249,8 @@ class RhythmSlicerApp(App):
             self._loading = False
         self.player.stop()
         self._playing_index = None
+        self._playing_track_id = None
+        self._current_track_row = None
         self._stop_hackscript()
         self._set_message("Stopped")
         logger.info("Playback stopped")
@@ -1191,7 +1292,7 @@ class RhythmSlicerApp(App):
         self._apply_playback_rate(1.0, message="Speed reset")
 
     def action_next_track(self) -> None:
-        if not self.playlist or self.playlist.is_empty():
+        if self._playlist_count <= 0:
             self._set_message("No tracks loaded")
             self._refresh_transport_controls()
             return
@@ -1205,7 +1306,7 @@ class RhythmSlicerApp(App):
         self._refresh_transport_controls()
 
     def action_previous_track(self) -> None:
-        if not self.playlist or self.playlist.is_empty():
+        if self._playlist_count <= 0:
             self._set_message("No tracks loaded")
             self._refresh_transport_controls()
             return
@@ -1250,19 +1351,21 @@ class RhythmSlicerApp(App):
         self.push_screen(PlaylistBuilderScreen(start_path))
 
     def action_move_up(self) -> None:
-        if not self.playlist or self.playlist.is_empty():
+        if self._playlist_count <= 0:
             return
         self._set_user_navigation_lockout()
-        self._set_selected(max(0, self.playlist.index - 1))
+        current = self._selected_index or 0
+        self._set_selected(max(0, current - 1))
 
     def action_move_down(self) -> None:
-        if not self.playlist or self.playlist.is_empty():
+        if self._playlist_count <= 0:
             return
         self._set_user_navigation_lockout()
-        self._set_selected(min(len(self.playlist.tracks) - 1, self.playlist.index + 1))
+        current = self._selected_index or 0
+        self._set_selected(min(self._playlist_count - 1, current + 1))
 
     def action_play_selected(self) -> None:
-        if not self.playlist or self.playlist.is_empty():
+        if self._playlist_count <= 0:
             self._set_message("No tracks loaded")
             self._refresh_transport_controls()
             return
@@ -1280,40 +1383,93 @@ class RhythmSlicerApp(App):
         self._refresh_transport_controls()
 
     def action_remove_selected(self) -> None:
-        if not self.playlist or self.playlist.is_empty():
+        if self._playlist_count <= 0:
             return
-        if self.playlist.index < 0 or self.playlist.index >= len(self.playlist.tracks):
-            self.playlist.clamp_index()
+        selected_index = self._selected_index or 0
+        if selected_index < 0 or selected_index >= self._playlist_count:
+            self._selected_index = 0 if self._playlist_count > 0 else None
             self._update_playlist_view()
             return
-        selected_index = self.playlist.index
-        removed_track = self.playlist.tracks[selected_index]
-        playing_index = (
-            self._playing_index
-            if self._playing_index is not None
-            else self.playlist.index
+        row = (
+            self._playlist_table.get_cached_row(selected_index)
+            if self._playlist_table
+            else None
         )
-        was_playing = selected_index == playing_index
-        self.playlist.remove(selected_index)
-        self._playlist_paths_set = {track.path for track in self.playlist.tracks}
+        if row is None:
+            try:
+                asyncio.get_running_loop()
+            except RuntimeError:
+                row = self._playlist_store.get_row_at(
+                    self._playlist_view, selected_index
+                )
+                if row is None:
+                    return
+                self._handle_remove_requested_sync(row)
+                return
+
+            async def fetch() -> None:
+                fetched = await asyncio.to_thread(
+                    self._playlist_store.get_row_at,
+                    self._playlist_view,
+                    selected_index,
+                )
+                if fetched is None:
+                    return
+                self.call_from_thread(self._handle_remove_requested, fetched)
+
+            self.run_worker(fetch(), exclusive=True)
+            return
+        self._handle_remove_requested(row)
+
+    def _handle_remove_requested(self, row: TrackRow) -> None:
+        was_playing = row.track_id == self._playing_track_id
+
+        async def worker() -> None:
+            await asyncio.to_thread(
+                self._playlist_store.remove_track, self._playlist_id, row.track_id
+            )
+            total = self._playlist_store.count(self._playlist_view)
+            self.call_from_thread(self._handle_track_removed, row, total, was_playing)
+
+        self.run_worker(worker(), exclusive=True)
+
+    def _handle_remove_requested_sync(self, row: TrackRow) -> None:
+        was_playing = row.track_id == self._playing_track_id
+        self._playlist_store.remove_track(self._playlist_id, row.track_id)
+        total = self._playlist_store.count(self._playlist_view)
+        self._handle_track_removed(row, total, was_playing)
+
+    def _handle_track_removed(
+        self, removed_row: TrackRow, total: int, was_playing: bool
+    ) -> None:
+        self._playlist_count = total
         self._bump_playlist_meta_generation()
+        self._bump_playlist_view_generation()
         self._reset_play_order()
-        if self.playlist.is_empty():
+        if total <= 0:
             if self._playlist_list:
                 self._playlist_list.update("No tracks loaded")
             if was_playing:
                 self.player.stop()
                 self._playing_index = None
+                self._playing_track_id = None
+                self._current_track_row = None
                 self._stop_hackscript()
                 self._set_message("Playlist empty")
                 self._refresh_transport_controls()
             else:
-                self._set_message(f"Removed: {removed_track.title}")
+                title = removed_row.title or removed_row.path.name
+                self._set_message(f"Removed: {title}")
+            self._update_playlist_view()
             return
+        if self._selected_index is None or self._selected_index >= total:
+            self._selected_index = total - 1
+        self._selected_track_id = None
         self._update_playlist_view()
         if was_playing:
             self._play_current_track(on_failure="skip")
-        self._set_message(f"Removed: {removed_track.title}")
+        title = removed_row.title or removed_row.path.name
+        self._set_message(f"Removed: {title}")
         self._refresh_transport_controls()
 
     def action_cycle_repeat(self) -> None:
@@ -1335,7 +1491,7 @@ class RhythmSlicerApp(App):
         self.run_worker(self._select_visualization_flow(), exclusive=True)
 
     async def action_save_playlist(self) -> None:
-        if not self.playlist or self.playlist.is_empty():
+        if self._playlist_count <= 0:
             self._set_message("No tracks to save", level="warn")
             return
         self.run_worker(self._save_playlist_flow(), exclusive=True)
@@ -1372,17 +1528,15 @@ class RhythmSlicerApp(App):
         self._install_asyncio_exception_handler()
         self._start_hang_watchdog()
         self.player.set_volume(self._volume)
-        if self.playlist is None:
-            if not self._explicit_path and self._last_open_path:
-                if self._last_open_path.exists():
-                    self.playlist = load_from_input(self._last_open_path)
-                    self._filename = self._last_open_path.name
-            if self.playlist is None and self._explicit_path:
-                self.playlist = load_from_input(Path(self.path))
-            if self.playlist is None:
-                self.playlist = Playlist([])
-        await self.set_playlist(self.playlist, preserve_path=None)
-        if self.playlist and not self.playlist.is_empty():
+        paths: list[Path] = []
+        if not self._explicit_path and self._last_open_path:
+            if self._last_open_path.exists():
+                paths = load_paths_from_input(self._last_open_path)
+                self._filename = self._last_open_path.name
+        if not paths and self._explicit_path:
+            paths = load_paths_from_input(Path(self.path))
+        await self.set_playlist_paths(paths, preserve_path=None)
+        if self._playlist_count > 0:
             self._play_current_track(on_failure="skip")
         else:
             self._set_message("No tracks loaded")
@@ -1405,6 +1559,7 @@ class RhythmSlicerApp(App):
         if self._hang_watchdog:
             self._hang_watchdog.stop()
         self._playlist_meta_loader.stop()
+        self._playlist_store.close()
 
     def on_button_pressed(self, event: Button.Pressed) -> None:
         if event.button.id == "repeat_toggle":
@@ -1419,24 +1574,28 @@ class RhythmSlicerApp(App):
     ) -> None:
         if self._suppress_table_events:
             return
-        if not self.playlist or self.playlist.is_empty():
+        if self._playlist_count <= 0:
             return
         self._set_user_navigation_lockout()
         index = message.index
         self._selected_key = self._playlist_row_key(index)
-        if index == self.playlist.index:
+        self._selected_index = index
+        self._selected_track_id = message.track_id
+        if self._playing_index is not None and index == self._playing_index:
             return
         self._set_selected(index, move_cursor=False, update_selected_key=True)
 
     def on_virtual_playlist_table_row_selected(
         self, message: PlaylistTable.RowSelected
     ) -> None:
-        if not self.playlist or self.playlist.is_empty():
+        if self._playlist_count <= 0:
             return
         self._set_user_navigation_lockout()
         index = message.index
         self._selected_key = self._playlist_row_key(index)
-        if index != self.playlist.index:
+        self._selected_index = index
+        self._selected_track_id = message.track_id
+        if self._playing_index is None or index != self._playing_index:
             self._set_selected(index, move_cursor=False, update_selected_key=True)
         self.action_play_selected()
 
@@ -1444,7 +1603,7 @@ class RhythmSlicerApp(App):
         self, message: PlaylistTable.ScrollChanged
     ) -> None:
         del message
-        self._queue_visible_metadata()
+        self._request_playlist_page()
 
     def on_mouse_down(self, event: events.MouseDown) -> None:
         if self._status_time_bar and getattr(self._status_time_bar, "region", None):
@@ -1570,11 +1729,7 @@ class RhythmSlicerApp(App):
         sy = getattr(event, "screen_y", event.y)
         if region and not region.contains(sx, sy):
             return
-        max_offset = (
-            max(0, len(self.playlist.tracks) - self._playlist_view_height())
-            if self.playlist
-            else 0
-        )
+        max_offset = max(0, self._playlist_count - self._playlist_view_height())
         self._scroll_offset = min(self._scroll_offset + 1, max_offset)
         self._update_playlist_view()
         event.stop()
@@ -1634,7 +1789,7 @@ class RhythmSlicerApp(App):
             return
         self._refresh_playlist_table()
         self._update_playlist_controls()
-        self._queue_visible_metadata()
+        self._request_playlist_page()
 
     def _update_playlist_controls(self) -> None:
         if not self._playlist_counter:
@@ -1673,28 +1828,27 @@ class RhythmSlicerApp(App):
             self._playlist_list, "size", None
         )
         height = getattr(size, "height", 0) if size else 0
-        if height <= 0 and self.playlist:
-            height = len(self.playlist.tracks)
+        if height <= 0:
+            height = self._playlist_count
         return max(1, height)
 
     def _row_to_index(self, row: int) -> Optional[int]:
-        if not self.playlist or self.playlist.is_empty():
+        if self._playlist_count <= 0:
             return None
         view_height = self._playlist_view_height()
         if row < 0 or row >= view_height:
             return None
         index = self._scroll_offset + row
-        if index >= len(self.playlist.tracks):
+        if index >= self._playlist_count:
             return None
         return index
 
     def _play_selected(self) -> None:
-        if not self.playlist or self.playlist.is_empty():
+        if self._playlist_count <= 0:
             self._set_message("No tracks loaded")
             return
         self._sync_play_order_pos()
         self._play_current_track(on_failure="skip")
-        self._sync_selection()
 
     def _set_volume_from_ratio(self, ratio: float) -> None:
         volume = int(max(0.0, min(1.0, ratio)) * 100)
@@ -1753,22 +1907,23 @@ class RhythmSlicerApp(App):
         right_column.styles.display = "block" if show_visualizer else "none"
 
     def _reset_play_order(self) -> None:
-        if not self.playlist or self.playlist.is_empty():
+        if self._playlist_count <= 0:
             self._play_order = []
             self._play_order_pos = -1
             return
         self._play_order, self._play_order_pos = build_play_order(
-            len(self.playlist.tracks),
-            self.playlist.index,
+            self._playlist_count,
+            self._selected_index or 0,
             self._shuffle,
             self._rng,
         )
 
     def _sync_play_order_pos(self) -> None:
-        if not self.playlist or not self._play_order:
+        if self._playlist_count <= 0 or not self._play_order:
             return
+        selected_index = self._selected_index or 0
         try:
-            self._play_order_pos = self._play_order.index(self.playlist.index)
+            self._play_order_pos = self._play_order.index(selected_index)
         except ValueError:
             self._play_order_pos = 0
 
@@ -1802,15 +1957,15 @@ class RhythmSlicerApp(App):
     def _default_save_path(self) -> Path:
         if self._last_playlist_path:
             return self._last_playlist_path
-        if self.playlist:
-            current = self.playlist.current()
-            if current:
-                return current.path.parent / "playlist.m3u8"
+        if self._current_track_path:
+            return self._current_track_path.parent / "playlist.m3u8"
         return Path.cwd() / "playlist.m3u8"
 
     async def _save_playlist_flow(self) -> None:
-        playlist = self.playlist
-        if playlist is None:
+        paths = await asyncio.to_thread(
+            self._playlist_store.list_paths, self._playlist_id
+        )
+        if not paths:
             self._set_message("Playlist is empty", level="warn")
             return
         default_path = self._default_save_path()
@@ -1833,7 +1988,7 @@ class RhythmSlicerApp(App):
         try:
             from rhythm_slicer.playlist_io import save_m3u8
 
-            save_m3u8(playlist, dest, mode=save_mode_from_flag(result.save_absolute))
+            save_m3u8(paths, dest, mode=save_mode_from_flag(result.save_absolute))
         except Exception as exc:
             logger.exception("Save playlist failed: %s", dest)
             self._set_message(f"Save failed: {exc}", level="error")
@@ -1849,17 +2004,16 @@ class RhythmSlicerApp(App):
             return
         path = result.expanduser()
         try:
-            new_playlist = load_from_input(path)
+            new_paths = await asyncio.to_thread(load_paths_from_input, path)
         except Exception as exc:
             logger.exception("Load playlist failed: %s", path)
             self._set_message(f"Load failed: {exc}", level="error")
             return
-        if new_playlist.is_empty():
+        if not new_paths:
             self._set_message("Playlist is empty", level="warn")
             return
-        preserve_track = self.playlist.current() if self.playlist else None
-        preserve = preserve_track.path if preserve_track else None
-        await self.set_playlist(new_playlist, preserve_path=preserve)
+        preserve = self._current_track_path
+        await self.set_playlist_paths(new_paths, preserve_path=preserve)
         self._last_playlist_path = path
         if self._play_current_track(on_failure="skip"):
             self._set_message(f"Loaded playlist: {path}")
@@ -1881,24 +2035,29 @@ class RhythmSlicerApp(App):
             self._set_message("Path not found", level="warn")
             return
         try:
-            if recursive and path.is_dir():
-                new_playlist = _load_recursive_directory(path)
+            if getattr(self, "_loop", None) is None:
+                if recursive and path.is_dir():
+                    new_paths = _load_recursive_directory(path)
+                else:
+                    new_paths = load_paths_from_input(path)
+            elif recursive and path.is_dir():
+                new_paths = await asyncio.to_thread(_load_recursive_directory, path)
             else:
-                new_playlist = load_from_input(path)
+                new_paths = await asyncio.to_thread(load_paths_from_input, path)
         except Exception as exc:
             logger.exception("Open path failed: %s", path)
             self._set_message(f"Load failed: {exc}", level="error")
             return
-        if new_playlist.is_empty():
+        if not new_paths:
             self._set_message("No supported audio files found", level="warn")
             return
-        await self.set_playlist_from_open(new_playlist, source_path=path)
+        await self.set_playlist_from_open(new_paths, source_path=path)
         self._last_open_path = path
         self._open_recursive = recursive
         self._save_config()
         suffix = " (recursive)" if recursive and path.is_dir() else ""
-        self._set_message(f"Loaded {len(new_playlist.tracks)} tracks{suffix}")
-        logger.info("Tracks loaded count=%s path=%s", len(new_playlist.tracks), path)
+        self._set_message(f"Loaded {len(new_paths)} tracks{suffix}")
+        logger.info("Tracks loaded count=%s path=%s", len(new_paths), path)
 
     def _visualizer_viewport(self) -> tuple[int, int]:
         if not self._visualizer:

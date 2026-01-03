@@ -7,7 +7,7 @@ import time
 import threading
 
 from rhythm_slicer.metadata import TrackMeta
-from rhythm_slicer.ui.metadata_loader import MetadataLoader
+from rhythm_slicer.ui.metadata_loader import MetadataLoader, TrackRef
 
 
 def _wait_for(predicate, *, timeout: float = 1.0) -> None:
@@ -22,7 +22,7 @@ def test_metadata_loader_limits_initial_requests() -> None:
     calls: list[Path] = []
     loader = MetadataLoader(
         load_meta=lambda path: calls.append(path) or TrackMeta("a", "t"),
-        get_cached=lambda _: None,
+        get_cached=lambda _track_id, _path: None,
         max_workers=1,
         queue_limit=50,
     )
@@ -30,20 +30,20 @@ def test_metadata_loader_limits_initial_requests() -> None:
     loader.set_generation(1)
 
     paths = [Path(f"track_{idx}.mp3") for idx in range(10_000)]
-    visible = paths[:8]
+    visible = [TrackRef(idx, path) for idx, path in enumerate(paths[:8], start=1)]
     loader.update_visible(visible)
 
     _wait_for(lambda: len(calls) >= len(visible))
     loader.stop()
 
-    assert set(calls) == set(visible)
+    assert set(calls) == {ref.path for ref in visible}
 
 
 def test_metadata_loader_requests_visible_then_scrolled() -> None:
     calls: list[Path] = []
     loader = MetadataLoader(
         load_meta=lambda path: calls.append(path) or TrackMeta("a", "t"),
-        get_cached=lambda _: None,
+        get_cached=lambda _track_id, _path: None,
         max_workers=1,
         queue_limit=50,
     )
@@ -51,16 +51,18 @@ def test_metadata_loader_requests_visible_then_scrolled() -> None:
     loader.set_generation(1)
 
     paths = [Path(f"track_{idx}.mp3") for idx in range(20)]
-    first = paths[:4]
+    first = [TrackRef(idx, path) for idx, path in enumerate(paths[:4], start=1)]
     loader.update_visible(first)
     _wait_for(lambda: len(calls) >= len(first))
 
-    second = paths[10:14]
+    second = [
+        TrackRef(idx + 1, path) for idx, path in enumerate(paths[10:14], start=11)
+    ]
     loader.update_visible(second)
     _wait_for(lambda: len(calls) >= len(first) + len(second))
     loader.stop()
 
-    assert set(calls) == set(first + second)
+    assert set(calls) == {ref.path for ref in (first + second)}
 
 
 def test_metadata_loader_ignores_stale_generation_updates() -> None:
@@ -71,23 +73,25 @@ def test_metadata_loader_ignores_stale_generation_updates() -> None:
         block.wait(timeout=1.0)
         return TrackMeta("a", "t")
 
-    def notify(path: Path, _meta: TrackMeta | None, generation: int) -> None:
+    def notify(
+        _track_id: int, path: Path, _meta: TrackMeta | None, generation: int
+    ) -> None:
         calls.append((path, generation))
 
     loader = MetadataLoader(
         load_meta=fake_load,
-        get_cached=lambda _: None,
+        get_cached=lambda _track_id, _path: None,
         max_workers=1,
         queue_limit=10,
     )
     loader.start(notify)
     loader.set_generation(1)
     old_path = Path("old.mp3")
-    loader.update_visible([old_path])
+    loader.update_visible([TrackRef(1, old_path)])
     time.sleep(0.05)
     loader.set_generation(2)
     new_path = Path("new.mp3")
-    loader.update_visible([new_path])
+    loader.update_visible([TrackRef(2, new_path)])
     block.set()
 
     _wait_for(lambda: any(path == new_path for path, _ in calls))

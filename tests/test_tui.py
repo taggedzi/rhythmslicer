@@ -9,7 +9,6 @@ import pytest
 
 from rhythm_slicer import tui
 from rhythm_slicer.config import AppConfig
-from rhythm_slicer.playlist import Playlist, Track
 
 
 class DummyPlayer:
@@ -80,6 +79,17 @@ class DummyPlayerNoSeek(DummyPlayer):
 
 def _status_line(controller: tui.StatusController, *, width: int = 80) -> str:
     return controller.render_line(width).plain
+
+
+def _set_playlist_paths(app: tui.RhythmSlicerApp, paths: list[Path]) -> None:
+    asyncio.run(app.set_playlist_paths(paths, preserve_path=None))
+
+
+def _write_audio_files(tmp_path: Path, names: list[str]) -> list[Path]:
+    paths = [tmp_path / name for name in names]
+    for path in paths:
+        path.write_text("x", encoding="utf-8")
+    return paths
 
 
 def test_keybindings_route_playlist_builder() -> None:
@@ -218,8 +228,7 @@ def test_load_and_play_blocking_applies_rate() -> None:
     player = DummyPlayer()
     app = tui.RhythmSlicerApp(player=player, path="song.mp3")
     app._playback_rate = 1.5
-    track = Track(path=Path("song.mp3"), title="song.mp3")
-    app._load_and_play_blocking(track)
+    app._load_and_play_blocking(Path("song.mp3"))
     assert player.rate_calls[-1] == 1.5
 
 
@@ -260,103 +269,75 @@ def test_playlist_line_text_no_markup_artifact() -> None:
 
 def test_next_index_respects_wrap_and_shuffle() -> None:
     app = tui.RhythmSlicerApp(player=DummyPlayer(), path="song.mp3")
-    app.playlist = Playlist(
-        [
-            Track(path=Path("one.mp3"), title="one.mp3"),
-            Track(path=Path("two.mp3"), title="two.mp3"),
-            Track(path=Path("three.mp3"), title="three.mp3"),
-        ]
-    )
     app._play_order = [1, 0, 2]
     app._play_order_pos = 2
     assert app._next_index(wrap=False) is None
     assert app._next_index(wrap=True) == 1
 
 
-def test_end_reached_advances_track() -> None:
+def test_end_reached_advances_track(tmp_path: Path) -> None:
     app = tui.RhythmSlicerApp(player=DummyPlayer(), path="song.mp3")
-    app.playlist = Playlist(
-        [
-            Track(path=Path("one.mp3"), title="one.mp3"),
-            Track(path=Path("two.mp3"), title="two.mp3"),
-        ]
-    )
-    app.playlist.set_index(0)
+    paths = _write_audio_files(tmp_path, ["one.mp3", "two.mp3"])
+    _set_playlist_paths(app, paths)
+    app._selected_index = 0
     app._reset_play_order()
     app.player.signal_end_reached()
     app._on_tick()
-    assert app.playlist.index == 1
+    assert app._selected_index == 1
 
 
-def test_end_reached_repeats_one() -> None:
+def test_end_reached_repeats_one(tmp_path: Path) -> None:
     player = DummyPlayer()
     app = tui.RhythmSlicerApp(player=player, path="song.mp3")
-    app.playlist = Playlist(
-        [
-            Track(path=Path("one.mp3"), title="one.mp3"),
-            Track(path=Path("two.mp3"), title="two.mp3"),
-        ]
-    )
-    app.playlist.set_index(1)
+    paths = _write_audio_files(tmp_path, ["one.mp3", "two.mp3"])
+    _set_playlist_paths(app, paths)
+    app._selected_index = 1
     app._repeat_mode = "one"
     app._reset_play_order()
     app.player.signal_end_reached()
     app._on_tick()
-    assert app.playlist.index == 1
+    assert app._selected_index == 1
     assert player.play_calls == 1
 
 
-def test_end_reached_wraps_when_repeat_all() -> None:
+def test_end_reached_wraps_when_repeat_all(tmp_path: Path) -> None:
     app = tui.RhythmSlicerApp(player=DummyPlayer(), path="song.mp3")
-    app.playlist = Playlist(
-        [
-            Track(path=Path("one.mp3"), title="one.mp3"),
-            Track(path=Path("two.mp3"), title="two.mp3"),
-        ]
-    )
-    app.playlist.set_index(1)
+    paths = _write_audio_files(tmp_path, ["one.mp3", "two.mp3"])
+    _set_playlist_paths(app, paths)
+    app._selected_index = 1
     app._repeat_mode = "all"
     app._reset_play_order()
     app.player.signal_end_reached()
     app._on_tick()
-    assert app.playlist.index == 0
+    assert app._selected_index == 0
 
 
 def test_playlist_footer_empty() -> None:
-    playlist = Playlist([])
-    app = tui.RhythmSlicerApp(player=DummyPlayer(), path="song.mp3", playlist=playlist)
+    app = tui.RhythmSlicerApp(player=DummyPlayer(), path="song.mp3")
     assert "Track: --/0" in app._render_playlist_footer()
 
 
-def test_playlist_footer_single_track() -> None:
-    tracks = [Track(path=Path("one.mp3"), title="one.mp3")]
-    playlist = Playlist(tracks)
-    app = tui.RhythmSlicerApp(player=DummyPlayer(), path="song.mp3", playlist=playlist)
+def test_playlist_footer_single_track(tmp_path: Path) -> None:
+    app = tui.RhythmSlicerApp(player=DummyPlayer(), path="song.mp3")
+    paths = _write_audio_files(tmp_path, ["one.mp3"])
+    _set_playlist_paths(app, paths)
     assert "Track: 1/1" in app._render_playlist_footer()
 
 
-def test_playlist_footer_multiple_tracks() -> None:
-    tracks = [
-        Track(path=Path("one.mp3"), title="one.mp3"),
-        Track(path=Path("two.mp3"), title="two.mp3"),
-        Track(path=Path("three.mp3"), title="three.mp3"),
-    ]
-    playlist = Playlist(tracks)
-    playlist.set_index(1)
-    app = tui.RhythmSlicerApp(player=DummyPlayer(), path="song.mp3", playlist=playlist)
+def test_playlist_footer_multiple_tracks(tmp_path: Path) -> None:
+    app = tui.RhythmSlicerApp(player=DummyPlayer(), path="song.mp3")
+    paths = _write_audio_files(tmp_path, ["one.mp3", "two.mp3", "three.mp3"])
+    _set_playlist_paths(app, paths)
+    app._selected_index = 1
     assert "Track: 2/3" in app._render_playlist_footer()
 
 
-def test_playlist_footer_after_removal() -> None:
-    tracks = [
-        Track(path=Path("one.mp3"), title="one.mp3"),
-        Track(path=Path("two.mp3"), title="two.mp3"),
-        Track(path=Path("three.mp3"), title="three.mp3"),
-    ]
-    playlist = Playlist(tracks)
-    playlist.set_index(1)
-    playlist.remove(1)
-    app = tui.RhythmSlicerApp(player=DummyPlayer(), path="song.mp3", playlist=playlist)
+def test_playlist_footer_after_removal(tmp_path: Path) -> None:
+    app = tui.RhythmSlicerApp(player=DummyPlayer(), path="song.mp3")
+    paths = _write_audio_files(tmp_path, ["one.mp3", "two.mp3", "three.mp3"])
+    _set_playlist_paths(app, paths)
+    asyncio.run(app.set_playlist_paths([paths[0], paths[2]], preserve_path=None))
+    app._selected_index = 1
     assert "Track: 2/2" in app._render_playlist_footer()
 
 
@@ -401,21 +382,21 @@ def test_transport_play_pause_clicks() -> None:
 
 
 def test_open_path_calls_set_playlist(tmp_path: Path, monkeypatch) -> None:
-    playlist = Playlist([Track(path=Path("one.mp3"), title="one.mp3")])
+    playlist = [Path("one.mp3")]
     target = tmp_path / "music"
     target.mkdir()
 
-    def fake_load(path: Path) -> Playlist:
+    def fake_load(path: Path) -> list[Path]:
         assert path == target
         return playlist
 
-    calls: list[tuple[Playlist, Path]] = []
+    calls: list[tuple[list[Path], Path]] = []
 
-    async def fake_set(new_playlist: Playlist, source_path: Path) -> None:
+    async def fake_set(new_playlist: list[Path], source_path: Path) -> None:
         calls.append((new_playlist, source_path))
 
     app = tui.RhythmSlicerApp(player=DummyPlayer(), path="song.mp3")
-    monkeypatch.setattr(tui, "load_from_input", fake_load)
+    monkeypatch.setattr(tui, "load_paths_from_input", fake_load)
     app.set_playlist_from_open = fake_set  # type: ignore[assignment]
 
     asyncio.run(app._handle_open_path(str(target)))
@@ -433,13 +414,13 @@ def test_open_path_empty_playlist_shows_message(monkeypatch, tmp_path: Path) -> 
     target = tmp_path / "empty.m3u"
     target.write_text("", encoding="utf-8")
 
-    def fake_load(path: Path) -> Playlist:
+    def fake_load(path: Path) -> list[Path]:
         assert path == target
-        return Playlist([])
+        return []
 
     player = DummyPlayer()
     app = tui.RhythmSlicerApp(player=player, path="song.mp3")
-    monkeypatch.setattr(tui, "load_from_input", fake_load)
+    monkeypatch.setattr(tui, "load_paths_from_input", fake_load)
 
     asyncio.run(app._handle_open_path(str(target)))
     assert "No supported audio files found" in _status_line(app._status_controller)
@@ -453,9 +434,9 @@ def test_open_path_recursive_loads_sorted_tracks(tmp_path: Path) -> None:
     (root / "b.mp3").write_text("b", encoding="utf-8")
     (sub / "a.mp3").write_text("a", encoding="utf-8")
 
-    calls: list[Playlist] = []
+    calls: list[list[Path]] = []
 
-    async def fake_set(new_playlist: Playlist, source_path: Path) -> None:
+    async def fake_set(new_playlist: list[Path], source_path: Path) -> None:
         calls.append(new_playlist)
 
     app = tui.RhythmSlicerApp(player=DummyPlayer(), path="song.mp3")
@@ -463,105 +444,81 @@ def test_open_path_recursive_loads_sorted_tracks(tmp_path: Path) -> None:
 
     asyncio.run(app._handle_open_path(str(root), recursive=True))
     assert len(calls) == 1
-    titles = [track.title for track in calls[0].tracks]
+    titles = [path.name for path in calls[0]]
     assert titles == ["b.mp3", "a.mp3"]
     assert "Loaded 2 tracks (recursive)" in _status_line(app._status_controller)
 
 
-def test_next_prev_respects_wrap() -> None:
-    tracks = [
-        Track(path=Path("one.mp3"), title="one.mp3"),
-        Track(path=Path("two.mp3"), title="two.mp3"),
-    ]
-    playlist = Playlist(tracks)
+def test_next_prev_respects_wrap(tmp_path: Path) -> None:
     player = DummyPlayer()
-    app = tui.RhythmSlicerApp(player=player, path="song.mp3", playlist=playlist)
+    app = tui.RhythmSlicerApp(player=player, path="song.mp3")
+    paths = _write_audio_files(tmp_path, ["one.mp3", "two.mp3"])
+    _set_playlist_paths(app, paths)
     app._reset_play_order()
     assert app._next_index(wrap=False) == 1
     assert app._next_index(wrap=False) is None
     assert app._prev_index(wrap=False) == 0
 
 
-def test_shuffle_toggle_keeps_current_index() -> None:
-    tracks = [
-        Track(path=Path("one.mp3"), title="one.mp3"),
-        Track(path=Path("two.mp3"), title="two.mp3"),
-        Track(path=Path("three.mp3"), title="three.mp3"),
-    ]
-    playlist = Playlist(tracks)
-    playlist.set_index(1)
+def test_shuffle_toggle_keeps_current_index(tmp_path: Path) -> None:
     player = DummyPlayer()
     app = tui.RhythmSlicerApp(
         player=player,
         path="song.mp3",
-        playlist=playlist,
         rng=__import__("random").Random(3),
     )
+    paths = _write_audio_files(tmp_path, ["one.mp3", "two.mp3", "three.mp3"])
+    _set_playlist_paths(app, paths)
+    app._selected_index = 1
     app._reset_play_order()
-    original = playlist.index
+    original = app._selected_index or 0
     app._shuffle = True
     app._reset_play_order()
     assert app._play_order[app._play_order_pos] == original
 
 
-def test_next_track_advances_playlist() -> None:
-    tracks = [
-        Track(path=Path("one.mp3"), title="one.mp3"),
-        Track(path=Path("two.mp3"), title="two.mp3"),
-    ]
-    playlist = Playlist(tracks)
+def test_next_track_advances_playlist(tmp_path: Path) -> None:
     player = DummyPlayer()
-    app = tui.RhythmSlicerApp(player=player, path="song.mp3", playlist=playlist)
+    app = tui.RhythmSlicerApp(player=player, path="song.mp3")
+    paths = _write_audio_files(tmp_path, ["one.mp3", "two.mp3"])
+    _set_playlist_paths(app, paths)
     app._reset_play_order()
     app.action_next_track()
-    assert playlist.index == 1
-    assert player.loaded[-1] == "two.mp3"
+    assert app._selected_index == 1
+    assert player.loaded[-1] == str(paths[1])
 
 
-def test_play_selected_uses_list_selection() -> None:
-    tracks = [
-        Track(path=Path("one.mp3"), title="one.mp3"),
-        Track(path=Path("two.mp3"), title="two.mp3"),
-    ]
-    playlist = Playlist(tracks)
+def test_play_selected_uses_list_selection(tmp_path: Path) -> None:
     player = DummyPlayer()
-    app = tui.RhythmSlicerApp(player=player, path="song.mp3", playlist=playlist)
-
-    app._selection_index = 1
-    playlist.set_index(1)
+    app = tui.RhythmSlicerApp(player=player, path="song.mp3")
+    paths = _write_audio_files(tmp_path, ["one.mp3", "two.mp3"])
+    _set_playlist_paths(app, paths)
+    app._selected_index = 1
     app.action_play_selected()
-    assert playlist.index == 1
-    assert player.loaded[-1] == "two.mp3"
+    assert app._selected_index == 1
+    assert player.loaded[-1] == str(paths[1])
 
 
-def test_remove_current_track_plays_next() -> None:
-    tracks = [
-        Track(path=Path("one.mp3"), title="one.mp3"),
-        Track(path=Path("two.mp3"), title="two.mp3"),
-    ]
-    playlist = Playlist(tracks)
+def test_remove_current_track_plays_next(tmp_path: Path) -> None:
     player = DummyPlayer()
-    app = tui.RhythmSlicerApp(player=player, path="song.mp3", playlist=playlist)
-
-    app._selection_index = 0
-    playlist.set_index(0)
+    app = tui.RhythmSlicerApp(player=player, path="song.mp3")
+    paths = _write_audio_files(tmp_path, ["one.mp3", "two.mp3"])
+    _set_playlist_paths(app, paths)
+    app._selected_index = 0
     app._play_current_track()
     app.action_remove_selected()
-    assert playlist.index == 0
-    assert playlist.current() == tracks[1]
-    assert player.loaded[-1] == "two.mp3"
+    assert app._playlist_count == 1
+    assert player.loaded[-1] == str(paths[1])
 
 
-def test_remove_current_track_stops_when_empty() -> None:
-    tracks = [Track(path=Path("one.mp3"), title="one.mp3")]
-    playlist = Playlist(tracks)
+def test_remove_current_track_stops_when_empty(tmp_path: Path) -> None:
     player = DummyPlayer()
-    app = tui.RhythmSlicerApp(player=player, path="song.mp3", playlist=playlist)
-
-    app._selection_index = 0
-    playlist.set_index(0)
+    app = tui.RhythmSlicerApp(player=player, path="song.mp3")
+    paths = _write_audio_files(tmp_path, ["one.mp3"])
+    _set_playlist_paths(app, paths)
+    app._selected_index = 0
     app._play_current_track()
     app.action_remove_selected()
-    assert playlist.is_empty()
+    assert app._playlist_count == 0
     assert player.stop_calls == 1
     assert "Playlist empty" in _status_line(app._status_controller)

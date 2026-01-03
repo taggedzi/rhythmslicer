@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from pathlib import Path
 import time
 from typing import Sequence
 
@@ -11,8 +10,7 @@ from textual.message import Message
 from textual.strip import Strip
 from textual.widget import Widget
 
-from rhythm_slicer.metadata import TrackMeta, get_cached_track_meta
-from rhythm_slicer.playlist import Track
+from rhythm_slicer.playlist_store_sqlite import TrackRow
 from rhythm_slicer.ui.tui_formatters import ellipsize
 
 
@@ -26,14 +24,16 @@ class VirtualPlaylistTable(Widget):
     """Virtualized playlist table that renders only visible rows."""
 
     class CursorMoved(Message):
-        def __init__(self, index: int) -> None:
+        def __init__(self, index: int, track_id: int | None) -> None:
             super().__init__()
             self.index = index
+            self.track_id = track_id
 
     class RowSelected(Message):
-        def __init__(self, index: int) -> None:
+        def __init__(self, index: int, track_id: int | None) -> None:
             super().__init__()
             self.index = index
+            self.track_id = track_id
 
     class ScrollChanged(Message):
         bubble = True
@@ -46,18 +46,22 @@ class VirtualPlaylistTable(Widget):
 
     def __init__(
         self,
-        tracks: Sequence[Track] | None = None,
+        rows: Sequence[TrackRow] | None = None,
         *,
         id: str | None = None,
     ) -> None:
         super().__init__(id=id)
         self.can_focus = True
-        self._tracks: Sequence[Track] = tracks or []
+        self._rows_by_index: dict[int, TrackRow] = {}
+        self._index_by_track_id: dict[int, int] = {}
+        self._total_count = 0
         self.cursor_index = 0
-        self.playing_index: int | None = None
+        self.playing_track_id: int | None = None
         self._scroll_offset = 0
         self._last_click_time = 0.0
         self._last_click_index: int | None = None
+        if rows:
+            self.set_tracks(rows)
 
     def on_mount(self) -> None:
         self.styles.height = "1fr"
@@ -71,18 +75,46 @@ class VirtualPlaylistTable(Widget):
         self.refresh()
 
     def reset(self) -> None:
-        self._tracks = []
+        self._rows_by_index.clear()
+        self._index_by_track_id.clear()
+        self._total_count = 0
         self.cursor_index = 0
-        self.playing_index = None
+        self.playing_track_id = None
         self._scroll_offset = 0
         self._post_scroll_changed()
         self.refresh()
 
-    def set_tracks(self, tracks: Sequence[Track]) -> None:
-        self._tracks = tracks
+    def set_tracks(self, rows: Sequence[TrackRow]) -> None:
+        self._rows_by_index = {idx: row for idx, row in enumerate(rows)}
+        self._index_by_track_id = {row.track_id: idx for idx, row in enumerate(rows)}
+        self._total_count = len(rows)
         self._sanitize_state()
         self._clamp_scroll_offset()
         self._post_scroll_changed()
+        self.refresh()
+
+    def set_total_count(self, total: int) -> None:
+        self._total_count = max(0, total)
+        self._sanitize_state()
+        self._clamp_scroll_offset()
+        self._post_scroll_changed()
+        self.refresh()
+
+    def set_rows(self, offset: int, rows: Sequence[TrackRow]) -> None:
+        for idx, row in enumerate(rows):
+            absolute = offset + idx
+            self._rows_by_index[absolute] = row
+            self._index_by_track_id[row.track_id] = absolute
+        self._sanitize_state()
+        self._clamp_scroll_offset()
+        self._post_scroll_changed()
+        self.refresh()
+
+    def update_row(self, track_id: int, row: TrackRow) -> None:
+        index = self._index_by_track_id.get(track_id)
+        if index is None:
+            return
+        self._rows_by_index[index] = row
         self.refresh()
 
     def notify_data_changed(self) -> None:
@@ -91,10 +123,10 @@ class VirtualPlaylistTable(Widget):
         self._post_scroll_changed()
         self.refresh()
 
-    def set_playing_index(self, index: int | None) -> None:
-        if index == self.playing_index:
+    def set_playing_track_id(self, track_id: int | None) -> None:
+        if track_id == self.playing_track_id:
             return
-        self.playing_index = index
+        self.playing_track_id = track_id
         self.refresh()
 
     def get_visible_indices(self) -> list[int]:
@@ -108,6 +140,9 @@ class VirtualPlaylistTable(Widget):
     def view_info(self) -> tuple[int, int, int]:
         return self._scroll_offset, self._track_count(), self._viewport_height()
 
+    def get_cached_row(self, index: int) -> TrackRow | None:
+        return self._rows_by_index.get(index)
+
     def set_cursor_index(self, index: int) -> None:
         count = self._track_count()
         if count <= 0:
@@ -120,7 +155,9 @@ class VirtualPlaylistTable(Widget):
             return
         self.cursor_index = clamped
         self._ensure_cursor_visible()
-        self.post_message(self.CursorMoved(self.cursor_index))
+        self.post_message(
+            self.CursorMoved(self.cursor_index, self._track_id_at(self.cursor_index))
+        )
         self.refresh()
 
     def on_key(self, event: events.Key) -> None:
@@ -152,7 +189,11 @@ class VirtualPlaylistTable(Widget):
             event.stop()
             return
         if key == "enter":
-            self.post_message(self.RowSelected(self.cursor_index))
+            self.post_message(
+                self.RowSelected(
+                    self.cursor_index, self._track_id_at(self.cursor_index)
+                )
+            )
             event.stop()
 
     def on_mouse_down(self, event: events.MouseDown) -> None:
@@ -164,7 +205,7 @@ class VirtualPlaylistTable(Widget):
             self.focus()
             now = time.monotonic()
             if self._last_click_index == index and now - self._last_click_time <= 0.4:
-                self.post_message(self.RowSelected(index))
+                self.post_message(self.RowSelected(index, self._track_id_at(index)))
             self._last_click_index = index
             self._last_click_time = now
             event.stop()
@@ -194,9 +235,11 @@ class VirtualPlaylistTable(Widget):
         return Strip(segments)
 
     def _render_row(self, index: int, width: int) -> Text:
-        track = self._tracks[index]
-        meta = self._cached_meta(track.path)
-        title, artist = self._row_text(track, meta, width)
+        row = self._rows_by_index.get(index)
+        if row is None:
+            title, artist = self._row_text(None, None, width)
+        else:
+            title, artist = self._row_text(row, row.has_metadata, width)
         title_width, artist_width = self._column_widths(width)
         title = title.ljust(title_width)
         artist = artist.ljust(artist_width)
@@ -208,16 +251,18 @@ class VirtualPlaylistTable(Widget):
         return text
 
     def _row_text(
-        self, track: Track, meta: TrackMeta | None, width: int
+        self, row: TrackRow | None, has_metadata: bool | None, width: int
     ) -> tuple[str, str]:
         title_width, artist_width = self._column_widths(width)
-        title = track.title or track.path.name
-        if meta is None:
+        if row is None:
+            title = "Loading..."
             artist = "Loading..."
         else:
-            if meta.title:
-                title = meta.title
-            artist = meta.artist or "Unknown"
+            title = row.title or row.path.name
+            if not has_metadata:
+                artist = "Loading..."
+            else:
+                artist = row.artist or "Unknown"
         return (
             ellipsize(title, title_width),
             ellipsize(artist, artist_width),
@@ -245,7 +290,8 @@ class VirtualPlaylistTable(Widget):
         return title_width, artist_width
 
     def _row_style(self, index: int) -> _RowStyle:
-        if index == self.playing_index:
+        track_id = self._track_id_at(index)
+        if track_id is not None and track_id == self.playing_track_id:
             base = "bold #5fc9d6"
         else:
             base = None
@@ -253,11 +299,12 @@ class VirtualPlaylistTable(Widget):
             return _RowStyle(base=base, cursor="reverse")
         return _RowStyle(base=base)
 
-    def _cached_meta(self, path: Path) -> TrackMeta | None:
-        return get_cached_track_meta(path)
-
     def _track_count(self) -> int:
-        return len(self._tracks)
+        return self._total_count
+
+    def _track_id_at(self, index: int) -> int | None:
+        row = self._rows_by_index.get(index)
+        return row.track_id if row else None
 
     def _sanitize_state(self) -> None:
         count = self._track_count()

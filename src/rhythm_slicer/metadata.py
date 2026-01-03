@@ -11,17 +11,25 @@ class TrackMeta:
     artist: str | None
     title: str | None
     album: str | None = None
+    duration_seconds: float | None = None
 
 
-_TRACK_META_CACHE: dict[tuple[Path, int], TrackMeta] = {}
+METADATA_EXTRACTOR_VERSION = "1"
 
 
-def _cache_key(path: Path) -> tuple[Path, int]:
+_TRACK_META_CACHE: dict[tuple[Path, int, int], TrackMeta] = {}
+
+
+def _cache_key(path: Path) -> tuple[Path, int, int]:
     try:
         mtime_ns = path.stat().st_mtime_ns
     except OSError:
         mtime_ns = -1
-    return path, mtime_ns
+    try:
+        size_bytes = path.stat().st_size
+    except OSError:
+        size_bytes = -1
+    return path, mtime_ns, size_bytes
 
 
 def _extract_text(value: object | None) -> str | None:
@@ -77,7 +85,20 @@ def read_track_meta(path: Path) -> TrackMeta:
     artist = _read_tag(tags, ("artist", "ARTIST", "TPE1", "TPE2", "\xa9ART", "aART"))
     title = _read_tag(tags, ("title", "TITLE", "TIT2", "\xa9nam"))
     album = _read_tag(tags, ("album", "ALBUM", "TALB", "\xa9alb"))
-    return TrackMeta(artist=artist, title=title, album=album)
+    duration = None
+    info = getattr(audio, "info", None)
+    if info is not None:
+        length = getattr(info, "length", None)
+        try:
+            duration = float(length) if length is not None else None
+        except Exception:
+            duration = None
+    return TrackMeta(
+        artist=artist,
+        title=title,
+        album=album,
+        duration_seconds=duration,
+    )
 
 
 def get_track_meta(path: Path) -> TrackMeta:

@@ -82,9 +82,9 @@ class TransportControls(Static):
         app = self._app()
         state = (app.player.get_state() or "").lower()
         label.label = "Pause " if "playing" in state else "Play  "
-        playlist = getattr(app, "playlist", None)
         is_loading = bool(getattr(app, "_loading", False))
-        has_tracks = bool(playlist and not playlist.is_empty())
+        playlist_count = int(getattr(app, "_playlist_count", 0) or 0)
+        has_tracks = playlist_count > 0
         is_playing = "playing" in state
         is_paused = "paused" in state
         prev_button.disabled = is_loading or not has_tracks

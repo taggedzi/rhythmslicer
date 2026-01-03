@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+import asyncio
 import multiprocessing
 from multiprocessing.context import SpawnContext
 from multiprocessing.process import BaseProcess
@@ -10,10 +11,11 @@ from multiprocessing.queues import Queue as MPQueue
 from pathlib import Path
 import queue
 import threading
-from typing import Callable, Optional
+from typing import Callable, Optional, Sequence
 
 from rich.text import Text
 from textual import events
+from textual.css.query import NoMatches
 from textual.app import ComposeResult
 from textual.containers import Container, Horizontal, Vertical
 from textual.screen import ModalScreen, Screen
@@ -21,18 +23,20 @@ from textual.timer import Timer
 from textual.widget import Widget
 from textual.widgets import Button, Static
 
-from rhythm_slicer.metadata import format_display_title, get_cached_track_meta
-from rhythm_slicer.playlist import Playlist, Track
+from rhythm_slicer.metadata import TrackMeta
 from rhythm_slicer.playlist_builder import (
-    build_track_from_path,
     is_hidden_or_system,
-    reorder_items,
     run_collect_audio_files,
 )
 from rhythm_slicer.playlist_io import save_m3u8
 from rhythm_slicer.ui.file_browser import FileBrowserWidget
 from rhythm_slicer.ui.marquee import Marquee
-from rhythm_slicer.ui.metadata_loader import MetadataLoader
+from rhythm_slicer.ui.metadata_loader import MetadataLoader, TrackRef
+from rhythm_slicer.playlist_store_sqlite import (
+    PlaylistStoreSQLite,
+    PlaylistView,
+    TrackRow,
+)
 from rhythm_slicer.ui.virtual_playlist_list import (
     VirtualPlaylistList,
     VirtualPlaylistScrollbar,
@@ -74,6 +78,11 @@ class PlaylistBuilderScreen(Screen):
         self._scan_status_text = ""
         self._pending_commit_scan_id: int | None = None
         self._deferred_playlist_update = False
+        self._playlist_store: PlaylistStoreSQLite | None = None
+        self._playlist_view = PlaylistView(playlist_id="main")
+        self._playlist_count = 0
+        self._playlist_request_id = 0
+        self._playlist_view_generation = 0
         self._meta_loader = MetadataLoader(max_workers=2, queue_limit=100)
         self._meta_generation = 0
         self._meta_timer: Timer | None = None
@@ -135,6 +144,16 @@ class PlaylistBuilderScreen(Screen):
         self._playlist_scrollbar = self.query_one(
             "#builder_playlist_scrollbar", VirtualPlaylistScrollbar
         )
+        store = getattr(self.app, "_playlist_store", None)
+        if isinstance(store, PlaylistStoreSQLite):
+            self._playlist_store = store
+            playlist_id = getattr(self.app, "_playlist_id", "main")
+            self._playlist_view = PlaylistView(playlist_id=playlist_id)
+            self._meta_loader = MetadataLoader(
+                max_workers=2,
+                queue_limit=100,
+                get_cached=store.fetch_metadata_if_valid,
+            )
         self._refresh_playlist_entries()
         self._set_scan_status_visible(False)
         self._start_metadata_loader()
@@ -155,8 +174,7 @@ class PlaylistBuilderScreen(Screen):
             self._cancel_active_scan()
             return
         if button_id == "builder_playlist_select_all":
-            if self._playlist_list:
-                self._playlist_list.check_all()
+            self._select_all_tracks()
             return
         if button_id == "builder_playlist_remove":
             self.action_remove_from_playlist()
@@ -257,37 +275,121 @@ class PlaylistBuilderScreen(Screen):
     def _refresh_playlist_entries(self) -> None:
         if not self._playlist_list:
             return
-        playlist = self._ensure_playlist()
-        self._playlist_list.set_tracks(playlist.tracks)
+        if not self._playlist_store:
+            return
+        self._playlist_view_generation += 1
         self._meta_generation += 1
         self._meta_loader.set_generation(self._meta_generation)
-        if playlist.tracks:
-            self._update_playlist_details(self._focused_playlist_index())
-        else:
-            self._clear_playlist_details()
+        if self._playlist_count == 0:
+            try:
+                total = self._playlist_store.count(self._playlist_view)
+            except Exception:
+                total = 0
+            self._playlist_count = total
+            self._playlist_list.set_total_count(total)
+        self._request_playlist_page()
 
-    def _playlist_display_title(self, track: Track) -> str:
-        meta = get_cached_track_meta(track.path)
-        if meta:
-            return format_display_title(track.path, meta)
-        if track.title and track.title != track.path.stem:
-            return track.title
-        return track.path.name
+    def _request_playlist_page(self) -> None:
+        if not self._playlist_list or not self._playlist_store:
+            return
+        store = self._playlist_store
+        view = self._playlist_view
+        offset, total, viewport = self._playlist_list.view_info()
+        if viewport <= 0:
+            return
+        prefetch = 2
+        start = max(0, offset - prefetch)
+        max_total = max(total, self._playlist_count)
+        end = offset + viewport + prefetch
+        if max_total:
+            end = min(max_total, end)
+        if end <= start and max_total:
+            return
+        self._playlist_request_id += 1
+        request_id = self._playlist_request_id
+        generation = self._playlist_view_generation
 
-    def _playlist_details_text(self, track: Track) -> str:
-        title = self._playlist_display_title(track)
-        return f"{title} ({track.path})"
+        def worker() -> None:
+            total_count = store.count(view)
+            rows = store.page(view, start, end - start)
+            try:
+                self.app.call_from_thread(
+                    self._apply_playlist_page,
+                    request_id,
+                    generation,
+                    start,
+                    total_count,
+                    rows,
+                )
+            except Exception:
+                return
 
-    def _clear_playlist_details(self) -> None:
-        self.query_one("#builder_playlist_details", Marquee).set_text("")
+        self.app.run_worker(worker, exclusive=False, thread=True)
 
-    def _update_playlist_details(self, index: Optional[int]) -> None:
-        playlist = self._ensure_playlist()
-        if index is None or index < 0 or index >= len(playlist.tracks):
+    def _apply_playlist_page(
+        self,
+        request_id: int,
+        generation: int,
+        offset: int,
+        total_count: int,
+        rows: Sequence[TrackRow],
+    ) -> None:
+        if generation != self._playlist_view_generation:
+            return
+        if request_id != self._playlist_request_id:
+            return
+        self._playlist_count = total_count
+        if not self._playlist_list:
+            return
+        if total_count <= 0:
+            self._playlist_list.set_tracks([])
+            self._playlist_list.set_total_count(0)
             self._clear_playlist_details()
             return
-        details = self._playlist_details_text(playlist.tracks[index])
-        self.query_one("#builder_playlist_details", Marquee).set_text(details)
+        self._playlist_list.set_total_count(total_count)
+        self._playlist_list.set_rows(offset, rows)
+        self._queue_metadata_for_rows(rows)
+        focused = self._focused_playlist_index()
+        if focused is not None:
+            self._update_playlist_details(focused)
+
+    def _playlist_display_title(self, row: TrackRow | None) -> str:
+        if not row:
+            return ""
+        title = row.title or row.path.name
+        if row.artist:
+            return f"{row.artist} - {title}"
+        return title
+
+    def _playlist_details_text(self, row: TrackRow | None) -> str:
+        if not row:
+            return ""
+        title = self._playlist_display_title(row)
+        return f"{title} ({row.path})"
+
+    def _clear_playlist_details(self) -> None:
+        try:
+            self.query_one("#builder_playlist_details", Marquee).set_text("")
+        except NoMatches:
+            return
+
+    def _update_playlist_details(self, index: Optional[int]) -> None:
+        if not self._playlist_list or not self._playlist_store:
+            return
+        if index is None or index < 0:
+            self._clear_playlist_details()
+            return
+        row = self._playlist_list.get_cached_row(index)
+        if row is None:
+            row = self._playlist_store.get_row_at(self._playlist_view, index)
+        if row is None:
+            self._clear_playlist_details()
+            return
+        details = self._playlist_details_text(row)
+        try:
+            self.query_one("#builder_playlist_details", Marquee).set_text(details)
+        except NoMatches:
+            return
 
     def _focused_playlist_index(self) -> Optional[int]:
         if not self._playlist_list:
@@ -300,81 +402,109 @@ class PlaylistBuilderScreen(Screen):
         if self._playlist_list:
             self._playlist_list.toggle_checked_at_cursor()
 
-    def _remove_selected_tracks(self) -> None:
-        playlist = self._ensure_playlist()
-        if playlist.is_empty():
+    def _select_all_tracks(self) -> None:
+        if not self._playlist_store or not self._playlist_list:
             return
-        tracks = getattr(playlist, "tracks", None)
-        if not isinstance(tracks, list):
-            raise RuntimeError(
-                "PlaylistBuilderScreen expected playlist.tracks to be a list."
+        store = self._playlist_store
+        playlist_list = self._playlist_list
+        playlist_id = self._playlist_view.playlist_id
+
+        async def worker() -> None:
+            track_ids = await asyncio.to_thread(
+                store.list_track_ids,
+                playlist_id,
             )
-        selected_indices = self._selected_or_focused_indices()
-        valid_indices = {
-            index for index in selected_indices if 0 <= index < len(tracks)
-        }
-        if not valid_indices:
+            playlist_list.set_checked_track_ids(track_ids)
+
+        self.app.run_worker(worker(), exclusive=True)
+
+    def _remove_selected_tracks(self) -> None:
+        if not self._playlist_store:
             return
-        cursor_index = self._focused_playlist_index() or 0
-        playing_index = self._valid_playing_index(len(tracks))
-        original_count = len(tracks)
-        removed_indices = sorted(valid_indices, reverse=True)
-        removed_set = set(removed_indices)
-        for index in removed_indices:
-            playlist.remove(index)
-        if self._playlist_list:
-            self._playlist_list.clear_checked()
-        self._reconcile_playing_index_after_remove(
-            playing_index,
-            removed_set,
-            original_count,
+        store = self._playlist_store
+        view = self._playlist_view
+        playlist_id = self._playlist_view.playlist_id
+        selected_track_ids = (
+            set(self._playlist_list.get_checked_track_ids())
+            if self._playlist_list
+            else set()
         )
-        playlist.clamp_index()
-        self._refresh_playlist_after_edit()
-        self._refresh_playlist_entries()
-        self._restore_playlist_cursor(cursor_index)
+        focused_index = self._focused_playlist_index()
+        if not selected_track_ids and focused_index is None:
+            return
+        cursor_index = focused_index or 0
+        playing_track_id = self._current_playing_track_id()
+        original_count = self._playlist_count
+
+        async def worker() -> None:
+            def apply() -> tuple[set[int], int]:
+                selection = set(selected_track_ids)
+                if not selection and focused_index is not None:
+                    row = store.get_row_at(view, focused_index)
+                    if row:
+                        selection = {row.track_id}
+                if not selection:
+                    return set(), store.count(view)
+                for track_id in selection:
+                    store.remove_track(playlist_id, track_id)
+                total = store.count(view)
+                return selection, total
+
+            selection, total = await asyncio.to_thread(apply)
+            if not selection:
+                return
+            self._handle_remove_complete(
+                selection,
+                playing_track_id,
+                original_count,
+                total,
+                cursor_index,
+            )
+
+        self.app.run_worker(worker(), exclusive=True)
+        return
 
     def action_remove_from_playlist(self) -> None:
         self._remove_selected_tracks()
 
-    def _selected_or_focused_indices(self) -> set[int]:
+    def _selected_or_focused_track_ids(self) -> set[int]:
         if self._playlist_list:
-            checked = self._playlist_list.get_checked_indices()
+            checked = self._playlist_list.get_checked_track_ids()
             if checked:
                 return set(checked)
         focused = self._focused_playlist_index()
         if focused is None:
             return set()
-        return {focused}
+        row = (
+            self._playlist_list.get_cached_row(focused) if self._playlist_list else None
+        )
+        if row is None:
+            return set()
+        return {row.track_id}
 
-    def _valid_playing_index(self, track_count: int) -> Optional[int]:
-        playing_index = getattr(self.app, "_playing_index", None)
-        if playing_index is None:
-            return None
-        if 0 <= playing_index < track_count:
-            return playing_index
-        return None
+    def _current_playing_track_id(self) -> Optional[int]:
+        return getattr(self.app, "_playing_track_id", None)
 
-    def _reconcile_playing_index_after_remove(
+    def _handle_remove_complete(
         self,
-        playing_index: Optional[int],
-        removed_indices: set[int],
+        removed_track_ids: set[int],
+        playing_track_id: Optional[int],
         original_count: int,
+        total: int,
+        cursor_index: int,
     ) -> None:
-        if playing_index is None:
-            return
-        if playing_index not in removed_indices:
-            shift = sum(1 for index in removed_indices if index < playing_index)
-            setattr(self.app, "_playing_index", playing_index - shift)
-            return
-        remaining = original_count - len(removed_indices)
-        if remaining <= 0:
-            self._stop_playback_for_empty_playlist()
-            return
-        candidate = playing_index
-        if candidate >= remaining:
-            candidate = remaining - 1
-        setattr(self.app, "_playing_index", candidate)
+        if self._playlist_list:
+            self._playlist_list.clear_checked()
+        if playing_track_id in removed_track_ids:
+            if total <= 0:
+                self._stop_playback_for_empty_playlist()
+            else:
+                setattr(self.app, "_playing_track_id", None)
+                setattr(self.app, "_playing_index", None)
+        self._playlist_count = total
+        self._refresh_playlist_after_edit()
+        self._refresh_playlist_entries()
+        self._restore_playlist_cursor(cursor_index)
 
     def _stop_playback_for_empty_playlist(self) -> None:
         stop_action = getattr(self.app, "action_stop", None)
@@ -387,49 +517,54 @@ class PlaylistBuilderScreen(Screen):
         if hasattr(self.app, "_stop_hackscript"):
             self.app._stop_hackscript()
         setattr(self.app, "_playing_index", None)
+        setattr(self.app, "_playing_track_id", None)
 
     def _restore_playlist_cursor(self, preferred_index: int) -> None:
         if not self._playlist_list:
             return
-        if not self._ensure_playlist().tracks:
+        if self._playlist_count <= 0:
             return
         self._playlist_list.set_cursor_index(preferred_index)
         self._update_playlist_details(self._focused_playlist_index())
 
     def _move_selected_tracks(self, direction: str) -> None:
-        playlist = self._ensure_playlist()
-        if playlist.is_empty():
+        if not self._playlist_store:
             return
+        store = self._playlist_store
+        view = self._playlist_view
+        playlist_id = self._playlist_view.playlist_id
         selection = (
-            set(self._playlist_list.get_checked_indices())
+            set(self._playlist_list.get_checked_track_ids())
             if self._playlist_list
             else set()
         )
-        if not selection:
-            # No selection means move the cursor row by default.
-            focused = self._focused_playlist_index()
-            if focused is None:
-                return
-            selection = {focused}
-        playing_path = self._current_playing_path()
-        reordered, new_selection = reorder_items(
-            playlist.tracks,
-            selection,
-            "up" if direction == "up" else "down",
-        )
-        playlist.tracks = reordered
-        if self._playlist_list:
-            self._playlist_list.set_tracks(playlist.tracks)
-            self._playlist_list.set_checked_indices(new_selection)
-        self._reconcile_playing_index(playing_path)
-        self._refresh_playlist_after_edit()
-        self._refresh_playlist_entries()
-        if self._playlist_list and new_selection:
-            self._playlist_list.set_cursor_index(min(new_selection))
+        focused = self._focused_playlist_index()
+        if not selection and focused is None:
+            return
+
+        async def worker() -> None:
+            def apply() -> int:
+                selected_ids = set(selection)
+                if not selected_ids and focused is not None:
+                    row = store.get_row_at(view, focused)
+                    if row:
+                        selected_ids = {row.track_id}
+                if not selected_ids:
+                    return store.count(view)
+                store.move_tracks(
+                    playlist_id,
+                    selected_ids,
+                    "up" if direction == "up" else "down",
+                )
+                return store.count(view)
+
+            total = await asyncio.to_thread(apply)
+            self._handle_reorder_complete(total)
+
+        self.app.run_worker(worker(), exclusive=True)
 
     def _save_playlist(self, *, force_prompt: bool) -> None:
-        playlist = self._ensure_playlist()
-        if playlist.is_empty():
+        if not self._playlist_store or self._playlist_count <= 0:
             return
         if force_prompt or not getattr(self.app, "_last_playlist_path", None):
             if hasattr(self.app, "run_worker") and hasattr(
@@ -441,7 +576,8 @@ class PlaylistBuilderScreen(Screen):
         if not dest:
             return
         try:
-            save_m3u8(playlist, dest, mode="auto")
+            paths = self._playlist_store.list_paths(self._playlist_view.playlist_id)
+            save_m3u8(paths, dest, mode="auto")
         except Exception:
             return
         if hasattr(self.app, "_set_message"):
@@ -476,52 +612,8 @@ class PlaylistBuilderScreen(Screen):
             else:
                 self.app._refresh_transport_controls()
 
-    def _current_playing_path(self) -> Optional[Path]:
-        playlist = getattr(self.app, "playlist", None)
-        playing_index = getattr(self.app, "_playing_index", None)
-        if (
-            playlist
-            and playing_index is not None
-            and 0 <= playing_index < len(playlist.tracks)
-        ):
-            return playlist.tracks[playing_index].path
-        return None
-
-    def _reconcile_playing_index(self, playing_path: Optional[Path]) -> None:
-        if playing_path is None:
-            return
-        playlist = getattr(self.app, "playlist", None)
-        if not playlist:
-            return
-        for index, track in enumerate(playlist.tracks):
-            if track.path == playing_path:
-                setattr(self.app, "_playing_index", index)
-                return
-        setattr(self.app, "_playing_index", None)
-
-    def _ensure_playlist(self) -> Playlist:
-        playlist = getattr(self.app, "playlist", None)
-        if playlist is None:
-            playlist = Playlist([])
-            setattr(self.app, "playlist", playlist)
-        return playlist
-
-    def _add_paths_to_playlist(self, paths: list[Path]) -> None:
-        playlist = self._ensure_playlist()
-        existing = {self._resolve_path(track.path) for track in playlist.tracks}
-        new_paths = []
-        for path in paths:
-            resolved = self._resolve_path(path)
-            if resolved in existing:
-                continue
-            existing.add(resolved)
-            new_paths.append(path)
-        if not new_paths:
-            return
-        added_tracks = [build_track_from_path(path) for path in new_paths]
-        playlist.tracks.extend(added_tracks)
-        if playlist.index < 0:
-            playlist.index = 0
+    def _handle_reorder_complete(self, total: int) -> None:
+        self._playlist_count = total
         self._refresh_playlist_after_edit()
         self._refresh_playlist_entries()
 
@@ -589,9 +681,11 @@ class PlaylistBuilderScreen(Screen):
             try:
                 message = queue_handle.get(timeout=0.2)
             except queue.Empty:
-                if not process.is_alive():
-                    break
-                continue
+                if process.is_alive():
+                    continue
+                if getattr(process, "exitcode", None) is None:
+                    continue
+                break
             if not isinstance(message, tuple) or not message:
                 continue
             status = str(message[0])
@@ -658,37 +752,29 @@ class PlaylistBuilderScreen(Screen):
         self._start_commit_tracks(scan_id, payload)
 
     def _start_commit_tracks(self, scan_id: int, payload: list[str]) -> None:
-        playlist_snapshot = list(self._ensure_playlist().tracks)
+        if not self._playlist_store:
+            return
+        store = self._playlist_store
+        view = self._playlist_view
+        playlist_id = self._playlist_view.playlist_id
         self._pending_commit_scan_id = scan_id
 
         def worker() -> None:
-            existing = {self._resolve_path(track.path) for track in playlist_snapshot}
-            new_paths: list[Path] = []
-            for item in payload:
-                path = Path(item)
-                resolved = self._resolve_path(path)
-                if resolved in existing:
-                    continue
-                existing.add(resolved)
-                new_paths.append(path)
-            tracks = [build_track_from_path(path) for path in new_paths]
+            new_paths: list[Path] = [Path(item) for item in payload]
             try:
-                self.app.call_from_thread(self._finalize_commit_tracks, scan_id, tracks)
+                store.add_paths(playlist_id, new_paths)
+                total = store.count(view)
+                self.app.call_from_thread(self._finalize_commit_tracks, scan_id, total)
             except Exception:
                 return
 
         threading.Thread(target=worker, daemon=True).start()
 
-    def _finalize_commit_tracks(self, scan_id: int, tracks: list[Track]) -> None:
+    def _finalize_commit_tracks(self, scan_id: int, total: int) -> None:
         if scan_id != self._pending_commit_scan_id:
             return
         self._pending_commit_scan_id = None
-        if not tracks:
-            return
-        playlist = self._ensure_playlist()
-        playlist.tracks.extend(tracks)
-        if playlist.index < 0:
-            playlist.index = 0
+        self._playlist_count = total
         self._refresh_playlist_after_edit()
         self._refresh_playlist_entries()
 
@@ -696,49 +782,47 @@ class PlaylistBuilderScreen(Screen):
         if self._meta_timer:
             return
 
-        def notify(path: Path, meta, generation: int) -> None:
-            del generation
+        def notify(track_id: int, path: Path, meta, generation: int) -> None:
             try:
-                self.app.call_from_thread(self._handle_metadata_loaded, path, meta)
+                self.app.call_from_thread(
+                    self._handle_metadata_loaded, track_id, path, meta, generation
+                )
             except Exception:
                 return
 
         self._meta_loader.start(notify)
-        self._meta_timer = self.set_interval(0.25, self._queue_visible_metadata)
+        self._meta_timer = None
 
-    def _queue_visible_metadata(self) -> None:
-        if not self._playlist_list:
+    def _queue_metadata_for_rows(self, rows: Sequence[TrackRow]) -> None:
+        if not rows:
             return
-        playlist = self._ensure_playlist()
-        if not playlist.tracks:
-            return
-        visible = self._playlist_list.get_visible_indices()
-        if not visible:
-            return
-        prefetch = 2
-        start = max(0, visible[0] - prefetch)
-        end = min(len(playlist.tracks), visible[-1] + prefetch + 1)
-        desired_paths: list[Path] = []
-        for index in range(start, end):
-            track = playlist.tracks[index]
-            if get_cached_track_meta(track.path) is not None:
-                title = self._playlist_display_title(track)
-                self._playlist_list.set_title_override(track.path, title)
-            desired_paths.append(track.path)
-        self._meta_loader.update_visible(desired_paths)
+        refs = [TrackRef(row.track_id, row.path) for row in rows]
+        self._meta_loader.update_visible(refs)
 
-    def _handle_metadata_loaded(self, path: Path, meta) -> None:
-        if not self._playlist_list:
+    def _handle_metadata_loaded(
+        self,
+        track_id: int,
+        path: Path,
+        meta,
+        generation: int,
+    ) -> None:
+        if generation != self._meta_generation:
             return
-        if meta:
-            title = format_display_title(path, meta)
-            self._playlist_list.set_title_override(path, title)
-        else:
-            self._playlist_list.set_title_override(path, path.name)
+        if not self._playlist_store or not self._playlist_list:
+            return
+        if meta is None:
+            meta = TrackMeta(artist=None, title=None, album=None, duration_seconds=None)
+        try:
+            self._playlist_store.upsert_metadata(track_id, meta)
+        except Exception:
+            return
+        row = self._playlist_store.get_row_by_track_id(track_id)
+        if row:
+            self._playlist_list.update_row(track_id, row)
         focused = self._focused_playlist_index()
         if focused is not None:
-            track = self._ensure_playlist().tracks[focused]
-            if track.path == path:
+            cached = self._playlist_list.get_cached_row(focused)
+            if cached and cached.track_id == track_id:
                 self._update_playlist_details(focused)
 
     def _handle_scan_progress(self, scan_id: int, payload: dict[str, object]) -> None:
@@ -853,7 +937,7 @@ class PlaylistBuilderScreen(Screen):
 
     def _handle_hidden_confirm(self, result: bool | None, paths: list[Path]) -> None:
         if result:
-            self._start_add_scan(paths, allow_hidden_roots=paths)
+            self.call_later(self._start_add_scan, paths, allow_hidden_roots=paths)
 
     def on_unmount(self) -> None:
         if self._meta_timer:
@@ -897,6 +981,7 @@ class PlaylistBuilderScreen(Screen):
             offset=message.offset,
             viewport=message.viewport,
         )
+        self._request_playlist_page()
 
     def on_virtual_playlist_scrollbar_scroll_requested(
         self, message: VirtualPlaylistScrollbar.ScrollRequested

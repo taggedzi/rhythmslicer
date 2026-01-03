@@ -4,7 +4,7 @@ from dataclasses import dataclass
 from typing import Optional
 from typing_extensions import TypeAlias
 
-TrackSignature: TypeAlias = tuple[Optional[str], str, str, str, int, int]
+TrackSignature: TypeAlias = tuple[Optional[int], str, str, str, int, int]
 
 
 @dataclass

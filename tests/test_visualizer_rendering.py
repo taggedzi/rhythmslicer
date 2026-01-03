@@ -1,7 +1,3 @@
-from pathlib import Path
-
-from rhythm_slicer.metadata import TrackMeta
-from rhythm_slicer.playlist import Playlist, Track
 from rhythm_slicer.ui.visualizer_rendering import (
     center_visualizer_message,
     clip_frame_text,
@@ -377,10 +373,9 @@ def test_render_visualizer_hud_invalid_size() -> None:
     output = render_visualizer_hud(
         width=0,
         height=2,
-        playlist=None,
-        playing_index=None,
-        get_meta_cached=lambda path: None,
-        ensure_meta_loaded=lambda path: None,
+        title="—",
+        artist="Unknown",
+        album="Unknown",
         ellipsize_fn=lambda text, max_len: text[:max_len],
     )
     assert output.plain == ""
@@ -390,10 +385,9 @@ def test_render_visualizer_hud_no_playlist_defaults() -> None:
     output = render_visualizer_hud(
         width=14,
         height=2,
-        playlist=None,
-        playing_index=None,
-        get_meta_cached=lambda path: None,
-        ensure_meta_loaded=lambda path: None,
+        title="—",
+        artist="Unknown",
+        album="Unknown",
         ellipsize_fn=lambda text, max_len: text[:max_len],
     )
     lines = output.plain.split("\n")
@@ -402,41 +396,15 @@ def test_render_visualizer_hud_no_playlist_defaults() -> None:
     assert all(len(line) == 14 for line in lines)
 
 
-def test_render_visualizer_hud_uses_cached_meta() -> None:
-    track = Track(path=Path("song.mp3"), title="fallback")
-    playlist = Playlist([track])
-    meta = TrackMeta(artist="Artist", title="Title", album="Album")
-    ensured: list[Path] = []
-
+def test_render_visualizer_hud_uses_values() -> None:
     output = render_visualizer_hud(
         width=20,
         height=3,
-        playlist=playlist,
-        playing_index=0,
-        get_meta_cached=lambda path: meta,
-        ensure_meta_loaded=ensured.append,
+        title="Title",
+        artist="Artist",
+        album="Album",
         ellipsize_fn=lambda text, max_len: text[:max_len],
     )
     assert "Title" in output.plain
     assert "Artist" in output.plain
     assert "Album" in output.plain
-    assert ensured == []
-
-
-def test_render_visualizer_hud_ensure_meta_loaded() -> None:
-    track = Track(path=Path("song.mp3"), title="")
-    playlist = Playlist([track])
-    ensured: list[Path] = []
-
-    output = render_visualizer_hud(
-        width=18,
-        height=3,
-        playlist=playlist,
-        playing_index=0,
-        get_meta_cached=lambda path: None,
-        ensure_meta_loaded=ensured.append,
-        ellipsize_fn=lambda text, max_len: text[:max_len],
-    )
-    assert track.path.name in output.plain
-    assert "Unknown" in output.plain
-    assert ensured == [track.path]

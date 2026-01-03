@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from pathlib import Path
 from typing import Iterable, Sequence
 
 from rich.text import Text
@@ -11,7 +10,7 @@ from textual import events
 from textual.message import Message
 from textual.widget import Widget
 
-from rhythm_slicer.playlist import Track
+from rhythm_slicer.playlist_store_sqlite import TrackRow
 from rhythm_slicer.ui.text_helpers import _truncate_line
 
 
@@ -40,19 +39,22 @@ class VirtualPlaylistList(Widget):
 
     def __init__(
         self,
-        tracks: Sequence[Track] | None = None,
+        rows: Sequence[TrackRow] | None = None,
         *,
         id: str | None = None,
     ) -> None:
         super().__init__(id=id)
         self.can_focus = True
-        self._tracks: Sequence[Track] = tracks or []
+        self._rows_by_index: dict[int, TrackRow] = {}
+        self._index_by_track_id: dict[int, int] = {}
+        self._total_count = 0
         self.cursor_index = 0
-        self.checked: set[int] = set()
-        self.playing_index: int | None = None
+        self.checked_track_ids: set[int] = set()
+        self.playing_track_id: int | None = None
         self.filtered_indices: list[int] | None = None
-        self._title_overrides: dict[Path, str] = {}
         self._scroll_offset = 0
+        if rows:
+            self.set_tracks(rows)
 
     def on_mount(self) -> None:
         self.styles.height = "1fr"
@@ -65,52 +67,62 @@ class VirtualPlaylistList(Widget):
         self._post_scroll_changed()
         self.refresh()
 
-    def set_tracks(self, tracks: Sequence[Track]) -> None:
-        self._tracks = tracks
+    def set_tracks(self, rows: Sequence[TrackRow]) -> None:
+        self._rows_by_index = {idx: row for idx, row in enumerate(rows)}
+        self._index_by_track_id = {row.track_id: idx for idx, row in enumerate(rows)}
+        self._total_count = len(rows)
         self._sanitize_state()
-        self._prune_title_overrides()
         self._clamp_scroll_offset()
         self._post_scroll_changed()
         self.refresh()
 
-    def append_tracks(self, new_tracks: Sequence[Track]) -> None:
-        if not new_tracks:
-            return
-        if not isinstance(self._tracks, list):
-            self._tracks = list(self._tracks)
-        self._tracks.extend(new_tracks)
+    def set_total_count(self, total: int) -> None:
+        self._total_count = max(0, total)
         self._sanitize_state()
-        self._prune_title_overrides()
         self._clamp_scroll_offset()
         self._post_scroll_changed()
+        self.refresh()
+
+    def set_rows(self, offset: int, rows: Sequence[TrackRow]) -> None:
+        for idx, row in enumerate(rows):
+            absolute = offset + idx
+            self._rows_by_index[absolute] = row
+            self._index_by_track_id[row.track_id] = absolute
+        self._sanitize_state()
+        self._clamp_scroll_offset()
+        self._post_scroll_changed()
+        self.refresh()
+
+    def update_row(self, track_id: int, row: TrackRow) -> None:
+        index = self._index_by_track_id.get(track_id)
+        if index is None:
+            return
+        self._rows_by_index[index] = row
         self.refresh()
 
     def notify_data_changed(self) -> None:
         self._sanitize_state()
-        self._prune_title_overrides()
         self._clamp_scroll_offset()
         self._post_scroll_changed()
         self.refresh()
 
-    def set_checked_indices(self, indices: Iterable[int]) -> None:
-        count = self._track_count()
-        self.checked = {idx for idx in indices if 0 <= idx < count}
+    def set_checked_track_ids(self, track_ids: Iterable[int]) -> None:
+        self.checked_track_ids = {track_id for track_id in track_ids}
         self.refresh()
 
-    def get_checked_indices(self) -> list[int]:
-        return sorted(self.checked)
+    def get_checked_track_ids(self) -> list[int]:
+        return sorted(self.checked_track_ids)
 
     def clear_checked(self) -> None:
-        if not self.checked:
+        if not self.checked_track_ids:
             return
-        self.checked.clear()
+        self.checked_track_ids.clear()
         self.refresh()
 
     def check_all(self) -> None:
-        count = self._track_count()
-        if count <= 0:
+        if not self._index_by_track_id:
             return
-        self.checked = set(range(count))
+        self.checked_track_ids = set(self._index_by_track_id.keys())
         self.refresh()
 
     def get_visible_indices(self) -> list[int]:
@@ -121,21 +133,24 @@ class VirtualPlaylistList(Widget):
         end = min(self._track_count(), start + height)
         return list(range(start, end))
 
-    def set_title_override(self, path: Path, title: str) -> None:
-        if not title:
-            return
-        self._title_overrides[path] = title
-        self.refresh()
+    def view_info(self) -> tuple[int, int, int]:
+        return self._scroll_offset, self._track_count(), self._viewport_height()
+
+    def get_cached_row(self, index: int) -> TrackRow | None:
+        return self._rows_by_index.get(index)
 
     def toggle_checked_at_cursor(self) -> None:
         count = self._track_count()
         if count <= 0:
             return
         index = self._clamp_index(self.cursor_index)
-        if index in self.checked:
-            self.checked.remove(index)
+        track_id = self._track_id_at(index)
+        if track_id is None:
+            return
+        if track_id in self.checked_track_ids:
+            self.checked_track_ids.remove(track_id)
         else:
-            self.checked.add(index)
+            self.checked_track_ids.add(track_id)
         self.refresh()
 
     def set_cursor_index(self, index: int) -> None:
@@ -227,11 +242,15 @@ class VirtualPlaylistList(Widget):
         return Strip(segments)
 
     def _render_row(self, index: int, width: int) -> Text:
-        track = self._tracks[index]
+        row = self._rows_by_index.get(index)
         count_width = max(2, len(str(self._track_count() or 1)))
-        marker = "[x]" if index in self.checked else "[ ]"
-        playing = "▶" if self.playing_index == index else " "
-        title = self._title_overrides.get(track.path) or track.title or track.path.name
+        track_id = row.track_id if row else None
+        marker = "[x]" if track_id in self.checked_track_ids else "[ ]"
+        playing = "▶" if track_id == self.playing_track_id else " "
+        if row is None:
+            title = "Loading..."
+        else:
+            title = row.title or row.path.name
         line = f"{playing} {marker} {index + 1:>{count_width}d} {title}"
         line = _truncate_line(line, width)
         style = self._row_style(index)
@@ -241,25 +260,31 @@ class VirtualPlaylistList(Widget):
         return text
 
     def _row_style(self, index: int) -> _RowStyle:
-        base = "#5fc9d6" if index in self.checked else "#c6d0f2"
+        track_id = self._track_id_at(index)
+        base = "#5fc9d6" if track_id in self.checked_track_ids else "#c6d0f2"
         if index == self.cursor_index and self.has_focus:
             return _RowStyle(base=base, cursor="reverse")
         return _RowStyle(base=base)
 
     def _track_count(self) -> int:
-        return len(self._tracks)
+        return self._total_count
+
+    def _track_id_at(self, index: int) -> int | None:
+        row = self._rows_by_index.get(index)
+        return row.track_id if row else None
 
     def _sanitize_state(self) -> None:
         count = self._track_count()
         if count <= 0:
             self.cursor_index = 0
-            self.checked.clear()
+            self.checked_track_ids.clear()
             self._scroll_offset = 0
             self._post_scroll_changed()
             return
         self.cursor_index = self._clamp_index(self.cursor_index)
-        self.checked = {idx for idx in self.checked if 0 <= idx < count}
-        self._prune_title_overrides()
+        self.checked_track_ids = set(self.checked_track_ids)
+        if self._total_count == len(self._rows_by_index):
+            self.checked_track_ids.intersection_update(self._index_by_track_id.keys())
 
     def _ensure_cursor_visible(self) -> None:
         height = self._viewport_height()
@@ -317,16 +342,6 @@ class VirtualPlaylistList(Widget):
                 viewport=self._viewport_height(),
             )
         )
-
-    def _prune_title_overrides(self) -> None:
-        if not self._title_overrides:
-            return
-        paths = {track.path for track in self._tracks}
-        self._title_overrides = {
-            path: title
-            for path, title in self._title_overrides.items()
-            if path in paths
-        }
 
 
 class VirtualPlaylistScrollbar(Widget):
