@@ -207,6 +207,29 @@ async def _wait_for_playing_index(
     raise AssertionError(f"Playing index did not reach {value}.")
 
 
+async def _wait_for_playlist_details_text(
+    app: BuilderTestApp, pilot, needle: str, *, timeout: float = 1.0
+) -> None:
+    deadline = time.monotonic() + timeout
+    while time.monotonic() < deadline:
+        details = app.screen.query_one("#builder_playlist_details", Marquee)
+        if needle in details.current_text or needle in details.full_text:
+            return
+        await pilot.pause(0.01)
+    raise AssertionError(f"Playlist details did not include: {needle}")
+
+
+async def _wait_for_checked_tracks(
+    playlist_list: VirtualPlaylistList, pilot, *, timeout: float = 1.0
+) -> None:
+    deadline = time.monotonic() + timeout
+    while time.monotonic() < deadline:
+        if not playlist_list.get_checked_track_ids():
+            return
+        await pilot.pause(0.01)
+    raise AssertionError("Checked tracks were not cleared.")
+
+
 def _scan_status_text(screen: PlaylistBuilderScreen) -> str:
     return getattr(screen, "_scan_status_text", "")
 
@@ -675,9 +698,8 @@ def test_playlist_builder_highlight_updates_details(
                 "#builder_playlist", VirtualPlaylistList
             )
             playlist_list.set_cursor_index(1)
-            await pilot.pause()
+            await _wait_for_playlist_details_text(app, pilot, paths[1].name)
             details = app.screen.query_one("#builder_playlist_details", Marquee)
-            assert paths[1].name in details.current_text
             assert str(paths[1]) in details.full_text
 
     asyncio.run(runner())
@@ -730,11 +752,11 @@ def test_playlist_builder_remove_selected_rows(tmp_path: Path, monkeypatch) -> N
             playlist_list.set_checked_track_ids({track_ids[0], track_ids[2]})
             remove_button = app.screen.query_one("#builder_playlist_remove", Button)
             app.screen.on_button_pressed(Button.Pressed(remove_button))
-            await pilot.pause()
+            await _wait_for_playlist_count(app, pilot, 1)
             assert [
                 path.name for path in app._playlist_store.list_paths(app._playlist_id)
             ] == ["b.mp3"]
-            assert playlist_list.get_checked_track_ids() == []
+            await _wait_for_checked_tracks(playlist_list, pilot)
 
     asyncio.run(runner())
 
@@ -760,8 +782,8 @@ def test_playlist_builder_remove_playing_advances_to_next(
             playlist_list.set_checked_track_ids({track_ids[1]})
             remove_button = app.screen.query_one("#builder_playlist_remove", Button)
             app.screen.on_button_pressed(Button.Pressed(remove_button))
-            await pilot.pause()
-            assert app._playing_index is None
+            await _wait_for_playlist_count(app, pilot, 2)
+            await _wait_for_playing_index(app, pilot, None)
             assert app._playlist_store.list_paths(app._playlist_id)[1].name == "c.mp3"
             assert app.player.stop_calls == 0
 
@@ -789,6 +811,7 @@ def test_playlist_builder_remove_playing_last_moves_previous(
             playlist_list.set_checked_track_ids({track_ids[2]})
             remove_button = app.screen.query_one("#builder_playlist_remove", Button)
             app.screen.on_button_pressed(Button.Pressed(remove_button))
+            await _wait_for_playlist_count(app, pilot, 2)
             await _wait_for_playing_index(app, pilot, None)
             assert app._playlist_store.list_paths(app._playlist_id)[1].name == "b.mp3"
             assert app.player.stop_calls == 0

@@ -259,6 +259,12 @@ class RhythmSlicerApp(App):
         self._playlist_view = PlaylistView(playlist_id=self._playlist_id)
         self._playlist_view_generation = 0
         self._playlist_request_id = 0
+        self._playlist_page_in_flight = False
+        self._playlist_page_pending = False
+        self._playlist_page_inflight_id = 0
+        self._playlist_page_started_at = 0.0
+        self._playlist_last_view_info: tuple[int, int, int] | None = None
+        self._playlist_last_view_generation = -1
         self._playlist_count = 0
         self._playlist_meta_loader = MetadataLoader(
             max_workers=4,
@@ -692,12 +698,35 @@ class RhythmSlicerApp(App):
 
     def _bump_playlist_view_generation(self) -> None:
         self._playlist_view_generation += 1
+        self._playlist_last_view_info = None
+        self._playlist_last_view_generation = -1
 
     def _request_playlist_page(self) -> None:
         if not self._playlist_table:
             return
         offset, total, viewport = self._playlist_table.view_info()
         if viewport <= 0:
+            return
+        view_info = (offset, total, viewport)
+        if self._playlist_page_in_flight:
+            if self._now() - self._playlist_page_started_at > 1.5:
+                self._playlist_page_in_flight = False
+                self._playlist_page_inflight_id = 0
+                self._playlist_last_view_info = None
+                self._playlist_last_view_generation = -1
+            else:
+                if (
+                    self._playlist_last_view_info == view_info
+                    and self._playlist_last_view_generation
+                    == self._playlist_view_generation
+                ):
+                    return
+                self._playlist_page_pending = True
+                return
+        if (
+            self._playlist_last_view_info == view_info
+            and self._playlist_last_view_generation == self._playlist_view_generation
+        ):
             return
         prefetch = self._playlist_meta_prefetch
         start = max(0, offset - prefetch)
@@ -707,6 +736,11 @@ class RhythmSlicerApp(App):
         self._playlist_request_id += 1
         request_id = self._playlist_request_id
         generation = self._playlist_view_generation
+        self._playlist_page_in_flight = True
+        self._playlist_page_inflight_id = request_id
+        self._playlist_page_started_at = self._now()
+        self._playlist_last_view_info = view_info
+        self._playlist_last_view_generation = generation
 
         async def worker() -> None:
             playing_track_id = self._playing_track_id
@@ -723,9 +757,14 @@ class RhythmSlicerApp(App):
                     )
                 return total_count, rows, playing_index
 
-            total_count, rows, playing_index = await asyncio.to_thread(fetch)
+            try:
+                total_count, rows, playing_index = await asyncio.to_thread(fetch)
+            except Exception:
+                logger.exception("Playlist page fetch failed")
+                self.call_later(self._finish_playlist_page_request, request_id)
+                return
             self.call_later(
-                self._apply_playlist_page,
+                self._handle_playlist_page_result,
                 request_id,
                 generation,
                 start,
@@ -735,6 +774,34 @@ class RhythmSlicerApp(App):
             )
 
         self.run_worker(worker(), exclusive=False)
+
+    def _handle_playlist_page_result(
+        self,
+        request_id: int,
+        generation: int,
+        offset: int,
+        total_count: int,
+        rows: Sequence[TrackRow],
+        playing_index: int | None,
+    ) -> None:
+        self._apply_playlist_page(
+            request_id,
+            generation,
+            offset,
+            total_count,
+            rows,
+            playing_index,
+        )
+        self._finish_playlist_page_request(request_id)
+
+    def _finish_playlist_page_request(self, request_id: int) -> None:
+        if request_id != self._playlist_page_inflight_id:
+            return
+        self._playlist_page_in_flight = False
+        self._playlist_page_inflight_id = 0
+        if self._playlist_page_pending:
+            self._playlist_page_pending = False
+            self._request_playlist_page()
 
     def _apply_playlist_page(
         self,
@@ -899,11 +966,19 @@ class RhythmSlicerApp(App):
         if not self._playlist_table:
             return
         if self._playlist_count <= 0:
-            self._playlist_table.reset()
-            self._playlist_table.set_total_count(0)
-            self._playing_key = None
-            self._selected_key = None
-            return
+            try:
+                total = self._playlist_store.count(self._playlist_view)
+            except Exception:
+                total = 0
+            if total <= 0:
+                self._playlist_table.reset()
+                self._playlist_table.set_total_count(0)
+                self._playing_key = None
+                self._selected_key = None
+                return
+            self._playlist_count = total
+            self._playlist_last_view_info = None
+            self._playlist_last_view_generation = -1
         self._playlist_table.set_playing_track_id(self._playing_track_id)
         self._restore_table_cursor_from_selected()
         self._request_playlist_page()
@@ -1353,12 +1428,42 @@ class RhythmSlicerApp(App):
     def action_move_up(self) -> None:
         if self._playlist_count <= 0:
             return
+        try:
+            focused = self.focused
+        except Exception:
+            focused = None
+        if (
+            focused is not None
+            and focused is not self._playlist_list
+            and focused is not self._playlist_table
+        ):
+            return
+        if self._playlist_table is not None:
+            current = self._playlist_table.cursor_index
+            target = max(0, current - 1)
+            self._playlist_table.set_cursor_index(target)
+            return
         self._set_user_navigation_lockout()
         current = self._selected_index or 0
         self._set_selected(max(0, current - 1))
 
     def action_move_down(self) -> None:
         if self._playlist_count <= 0:
+            return
+        try:
+            focused = self.focused
+        except Exception:
+            focused = None
+        if (
+            focused is not None
+            and focused is not self._playlist_list
+            and focused is not self._playlist_table
+        ):
+            return
+        if self._playlist_table is not None:
+            current = self._playlist_table.cursor_index
+            target = min(self._playlist_count - 1, current + 1)
+            self._playlist_table.set_cursor_index(target)
             return
         self._set_user_navigation_lockout()
         current = self._selected_index or 0
