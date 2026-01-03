@@ -351,7 +351,7 @@ def _windows_file_attributes(path: Path) -> int | None:
     except Exception:
         return None
     try:
-        get_attrs = ctypes.windll.kernel32.GetFileAttributesW
+        get_attrs = ctypes.windll.kernel32.GetFileAttributesW  # type: ignore[attr-defined]
     except AttributeError:
         return None
     get_attrs.argtypes = [ctypes.c_wchar_p]

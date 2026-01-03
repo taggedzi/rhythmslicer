@@ -5,8 +5,9 @@ from typing import TYPE_CHECKING, Any, cast
 from textual import events
 from textual.app import ComposeResult
 from textual.containers import Horizontal
-from textual.widgets import Button, DataTable, Static
+from textual.widgets import Button, Static
 
+from rhythm_slicer.ui.virtual_playlist_table import VirtualPlaylistTable
 if TYPE_CHECKING:
     from rhythm_slicer.tui import RhythmSlicerApp
 else:
@@ -17,23 +18,23 @@ class VisualizerHud(Static):
     """Compact HUD for the visualizer pane."""
 
 
-class PlaylistTable(DataTable):
+class PlaylistTable(VirtualPlaylistTable):
     """Playlist table with double-click play behavior."""
 
-    async def _on_click(self, event: events.Click) -> None:
+    def on_mouse_down(self, event: events.MouseDown) -> None:
         if hasattr(self.app, "_set_user_navigation_lockout"):
             self.app._set_user_navigation_lockout()
-        await super()._on_click(event)
+        super().on_mouse_down(event)
 
-    def _on_mouse_scroll_down(self, event: events.MouseScrollDown) -> None:
+    def on_mouse_scroll_down(self, event: events.MouseScrollDown) -> None:
         if hasattr(self.app, "_set_user_navigation_lockout"):
             self.app._set_user_navigation_lockout()
-        super()._on_mouse_scroll_down(event)
+        super().on_mouse_scroll_down(event)
 
-    def _on_mouse_scroll_up(self, event: events.MouseScrollUp) -> None:
+    def on_mouse_scroll_up(self, event: events.MouseScrollUp) -> None:
         if hasattr(self.app, "_set_user_navigation_lockout"):
             self.app._set_user_navigation_lockout()
-        super()._on_mouse_scroll_up(event)
+        super().on_mouse_scroll_up(event)
 
 
 class TransportControls(Static):

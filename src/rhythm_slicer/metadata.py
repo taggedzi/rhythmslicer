@@ -13,7 +13,15 @@ class TrackMeta:
     album: str | None = None
 
 
-_TRACK_META_CACHE: dict[Path, TrackMeta] = {}
+_TRACK_META_CACHE: dict[tuple[Path, int], TrackMeta] = {}
+
+
+def _cache_key(path: Path) -> tuple[Path, int]:
+    try:
+        mtime_ns = path.stat().st_mtime_ns
+    except OSError:
+        mtime_ns = -1
+    return path, mtime_ns
 
 
 def _extract_text(value: object | None) -> str | None:
@@ -73,16 +81,17 @@ def read_track_meta(path: Path) -> TrackMeta:
 
 
 def get_track_meta(path: Path) -> TrackMeta:
-    cached = _TRACK_META_CACHE.get(path)
+    key = _cache_key(path)
+    cached = _TRACK_META_CACHE.get(key)
     if cached is not None:
         return cached
     meta = read_track_meta(path)
-    _TRACK_META_CACHE[path] = meta
+    _TRACK_META_CACHE[key] = meta
     return meta
 
 
 def get_cached_track_meta(path: Path) -> TrackMeta | None:
-    return _TRACK_META_CACHE.get(path)
+    return _TRACK_META_CACHE.get(_cache_key(path))
 
 
 def format_display_title(path: Path, meta: TrackMeta | None = None) -> str:

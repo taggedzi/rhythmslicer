@@ -21,11 +21,7 @@ from textual.timer import Timer
 from textual.widget import Widget
 from textual.widgets import Button, Static
 
-from rhythm_slicer.metadata import (
-    format_display_title,
-    get_cached_track_meta,
-    get_track_meta,
-)
+from rhythm_slicer.metadata import format_display_title, get_cached_track_meta
 from rhythm_slicer.playlist import Playlist, Track
 from rhythm_slicer.playlist_builder import (
     build_track_from_path,
@@ -36,6 +32,7 @@ from rhythm_slicer.playlist_builder import (
 from rhythm_slicer.playlist_io import save_m3u8
 from rhythm_slicer.ui.file_browser import FileBrowserWidget
 from rhythm_slicer.ui.marquee import Marquee
+from rhythm_slicer.ui.metadata_loader import MetadataLoader
 from rhythm_slicer.ui.virtual_playlist_list import (
     VirtualPlaylistList,
     VirtualPlaylistScrollbar,
@@ -77,10 +74,8 @@ class PlaylistBuilderScreen(Screen):
         self._scan_status_text = ""
         self._pending_commit_scan_id: int | None = None
         self._deferred_playlist_update = False
-        self._meta_queue: queue.Queue[Path] = queue.Queue()
-        self._meta_pending: set[Path] = set()
-        self._meta_stop = threading.Event()
-        self._meta_thread: threading.Thread | None = None
+        self._meta_loader = MetadataLoader(max_workers=2, queue_limit=100)
+        self._meta_generation = 0
         self._meta_timer: Timer | None = None
         self._playlist_scrollbar: VirtualPlaylistScrollbar | None = None
 
@@ -162,7 +157,6 @@ class PlaylistBuilderScreen(Screen):
             self._cancel_active_scan()
             return
         if button_id == "builder_playlist_select_all":
-            playlist = self._ensure_playlist()
             if self._playlist_list:
                 self._playlist_list.check_all()
             return
@@ -267,7 +261,8 @@ class PlaylistBuilderScreen(Screen):
             return
         playlist = self._ensure_playlist()
         self._playlist_list.set_tracks(playlist.tracks)
-        self._meta_pending.clear()
+        self._meta_generation += 1
+        self._meta_loader.set_generation(self._meta_generation)
         if playlist.tracks:
             self._update_playlist_details(self._focused_playlist_index())
         else:
@@ -698,30 +693,18 @@ class PlaylistBuilderScreen(Screen):
         self._refresh_playlist_entries()
 
     def _start_metadata_loader(self) -> None:
-        if self._meta_thread:
+        if self._meta_timer:
             return
-        self._meta_thread = threading.Thread(
-            target=self._metadata_loader, name="BuilderMetaLoader", daemon=True
-        )
-        self._meta_thread.start()
-        self._meta_timer = self.set_interval(0.25, self._queue_visible_metadata)
 
-    def _metadata_loader(self) -> None:
-        while not self._meta_stop.is_set():
+        def notify(path: Path, meta, generation: int) -> None:
+            del generation
             try:
-                path = self._meta_queue.get(timeout=0.2)
-            except queue.Empty:
-                continue
-            try:
-                meta = get_track_meta(path)
-            except Exception:
-                meta = None
-            try:
-                self.app.call_from_thread(
-                    self._handle_metadata_loaded, path, meta
-                )
+                self.app.call_from_thread(self._handle_metadata_loaded, path, meta)
             except Exception:
                 return
+
+        self._meta_loader.start(notify)
+        self._meta_timer = self.set_interval(0.25, self._queue_visible_metadata)
 
     def _queue_visible_metadata(self) -> None:
         if not self._playlist_list:
@@ -729,21 +712,22 @@ class PlaylistBuilderScreen(Screen):
         playlist = self._ensure_playlist()
         if not playlist.tracks:
             return
-        for index in self._playlist_list.get_visible_indices():
-            if index < 0 or index >= len(playlist.tracks):
-                continue
+        visible = self._playlist_list.get_visible_indices()
+        if not visible:
+            return
+        prefetch = 2
+        start = max(0, visible[0] - prefetch)
+        end = min(len(playlist.tracks), visible[-1] + prefetch + 1)
+        desired_paths: list[Path] = []
+        for index in range(start, end):
             track = playlist.tracks[index]
             if get_cached_track_meta(track.path) is not None:
                 title = self._playlist_display_title(track)
                 self._playlist_list.set_title_override(track.path, title)
-                continue
-            if track.path in self._meta_pending:
-                continue
-            self._meta_pending.add(track.path)
-            self._meta_queue.put(track.path)
+            desired_paths.append(track.path)
+        self._meta_loader.update_visible(desired_paths)
 
     def _handle_metadata_loaded(self, path: Path, meta) -> None:
-        self._meta_pending.discard(path)
         if not self._playlist_list:
             return
         if meta:
@@ -761,9 +745,12 @@ class PlaylistBuilderScreen(Screen):
         if scan_id != self._active_scan_id:
             return
         try:
-            dirs = int(payload.get("dirs", 0))
-            files = int(payload.get("files", 0))
-            found = int(payload.get("found", 0))
+            dirs_value = payload.get("dirs", 0)
+            files_value = payload.get("files", 0)
+            found_value = payload.get("found", 0)
+            dirs = int(dirs_value) if isinstance(dirs_value, (int, str)) else 0
+            files = int(files_value) if isinstance(files_value, (int, str)) else 0
+            found = int(found_value) if isinstance(found_value, (int, str)) else 0
             path = str(payload.get("path", ""))
         except Exception:
             return
@@ -875,7 +862,7 @@ class PlaylistBuilderScreen(Screen):
             except Exception:
                 pass
             self._meta_timer = None
-        self._meta_stop.set()
+        self._meta_loader.stop()
         for scan_id in list(self._scan_states.keys()):
             state = self._scan_states.pop(scan_id, None)
             if not state:
